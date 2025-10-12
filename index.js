@@ -34,6 +34,14 @@ app.use((req, res, next) => {
 });
 
 app.use(express.json());
+// Normalize any // in the path to / (Express 5/path-to-regexp is strict)
+app.use((req, _res, next) => {
+  const orig = req.url;
+  req.url = req.url.replace(/\/{2,}/g, '/'); // collapse multiple slashes
+  if (orig !== req.url) console.warn('normalized path:', orig, '->', req.url);
+  next();
+});
+
 
 // Health
 app.get('/', (_req, res) => res.send('API is running'));

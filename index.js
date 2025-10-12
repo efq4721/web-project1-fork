@@ -27,7 +27,7 @@ const corsMw = cors({
 });
 app.use(corsMw);
 
-// ✅ Express 5: handle ALL preflight without using '*' path
+// Handle ALL preflight (OPTIONS) early (Express 5 safe)
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -39,7 +39,7 @@ app.use(express.json());
 app.get('/', (_req, res) => res.send('API is running'));
 app.get('/ping', (_req, res) => res.json({ status: 'ok' }));
 
-// ---- Auth guard (single definition)
+// ---- Auth guard (single)
 async function authGuard(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
@@ -54,11 +54,8 @@ async function authGuard(req, res, next) {
   }
 }
 
-// ---- API router under /api
-const api = express.Router();
-api.use(authGuard);
-
-api.get('/sessions', async (req, res) => {
+// ---- API routes mounted directly ----
+app.get('/api/sessions', authGuard, async (req, res) => {
   const snap = await db.ref('sessions')
     .orderByChild('ownerUid').equalTo(req.user.uid).once('value');
   const val = snap.val() || {};
@@ -67,14 +64,19 @@ api.get('/sessions', async (req, res) => {
   res.json(list);
 });
 
-api.post('/sessions', async (req, res) => {
+app.post('/api/sessions', authGuard, async (req, res) => {
   const now = new Date().toISOString();
   const ref = db.ref('sessions').push();
-  await ref.set({ ownerUid: req.user.uid, title: req.body?.title || 'New chat', createdAt: now, updatedAt: now });
+  await ref.set({
+    ownerUid: req.user.uid,
+    title: req.body?.title || 'New chat',
+    createdAt: now,
+    updatedAt: now
+  });
   res.json({ id: ref.key });
 });
 
-api.get('/sessions/:id/messages', async (req, res) => {
+app.get('/api/sessions/:id/messages', authGuard, async (req, res) => {
   const sess = (await db.ref(`sessions/${req.params.id}`).once('value')).val();
   if (!sess || sess.ownerUid !== req.user.uid) return res.sendStatus(403);
 
@@ -85,7 +87,7 @@ api.get('/sessions/:id/messages', async (req, res) => {
   res.json(msgs);
 });
 
-api.post('/sessions/:id/messages', async (req, res) => {
+app.post('/api/sessions/:id/messages', authGuard, async (req, res) => {
   const { content } = req.body || {};
   if (!content) return res.status(400).json({ error: 'content required' });
 
@@ -102,12 +104,13 @@ api.post('/sessions/:id/messages', async (req, res) => {
   await db.ref(`messagesBySession/${req.params.id}`).push()
     .set({ ownerUid: req.user.uid, role:'assistant', content: reply, createdAt: new Date().toISOString() });
 
-  await sessRef.update({ updatedAt: new Date().toISOString(), title: sess.title || content.slice(0,40) });
+  await sessRef.update({
+    updatedAt: new Date().toISOString(),
+    title: sess.title || content.slice(0,40)
+  });
 
   res.json({ reply });
 });
-
-app.use('/api', api);
 
 // Debug 404
 app.use((req, res) => {

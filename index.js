@@ -29,7 +29,22 @@ app.use(cors({
 }));
 
 app.use(express.json());
-
+async function authGuard(req, res, next) {
+  const h = req.headers.authorization || '';
+  const token = h.startsWith('Bearer ') ? h.slice(7) : null;
+  if (!token) return res.sendStatus(403);
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    req.user = { uid: decoded.uid };
+    next();
+  } catch {
+    res.sendStatus(403);
+  }
+}
+app.use('/api', (req, res, next) => {
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  return authGuard(req, res, next);
+});
 // Root health
 app.get('/', (_req, res) => res.send('API is running'));
 app.get('/ping', (_req, res) => res.json({ status: 'ok' }));

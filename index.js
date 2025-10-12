@@ -26,14 +26,20 @@ const corsMw = cors({
   credentials: true
 });
 app.use(corsMw);
-app.options('*', corsMw);           // preflight OK for all routes
+
+// ✅ Express 5: handle ALL preflight without using '*' path
+app.use((req, res, next) => {
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  next();
+});
+
 app.use(express.json());
 
 // Health
 app.get('/', (_req, res) => res.send('API is running'));
 app.get('/ping', (_req, res) => res.json({ status: 'ok' }));
 
-// ---- Auth guard (single definition) ----
+// ---- Auth guard (single definition)
 async function authGuard(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
@@ -48,13 +54,8 @@ async function authGuard(req, res, next) {
   }
 }
 
-// ---- API router mounted under /api ----
+// ---- API router under /api
 const api = express.Router();
-
-// short-circuit OPTIONS for /api/*
-api.use((req, res, next) => (req.method === 'OPTIONS' ? res.sendStatus(204) : next()));
-
-// protect all /api/* with auth
 api.use(authGuard);
 
 api.get('/sessions', async (req, res) => {
@@ -69,12 +70,7 @@ api.get('/sessions', async (req, res) => {
 api.post('/sessions', async (req, res) => {
   const now = new Date().toISOString();
   const ref = db.ref('sessions').push();
-  await ref.set({
-    ownerUid: req.user.uid,
-    title: req.body?.title || 'New chat',
-    createdAt: now,
-    updatedAt: now
-  });
+  await ref.set({ ownerUid: req.user.uid, title: req.body?.title || 'New chat', createdAt: now, updatedAt: now });
   res.json({ id: ref.key });
 });
 
@@ -84,7 +80,6 @@ api.get('/sessions/:id/messages', async (req, res) => {
 
   const snap = await db.ref(`messagesBySession/${req.params.id}`)
     .orderByChild('createdAt').once('value');
-
   const msgs = [];
   snap.forEach(child => msgs.push({ id: child.key, ...child.val() }));
   res.json(msgs);
@@ -100,17 +95,14 @@ api.post('/sessions/:id/messages', async (req, res) => {
 
   const now = new Date().toISOString();
   await db.ref(`messagesBySession/${req.params.id}`).push()
-    .set({ ownerUid: req.user.uid, role: 'user', content, createdAt: now });
+    .set({ ownerUid: req.user.uid, role:'user', content, createdAt: now });
 
   const reply = `You said: ${content}`;
 
   await db.ref(`messagesBySession/${req.params.id}`).push()
-    .set({ ownerUid: req.user.uid, role: 'assistant', content: reply, createdAt: new Date().toISOString() });
+    .set({ ownerUid: req.user.uid, role:'assistant', content: reply, createdAt: new Date().toISOString() });
 
-  await sessRef.update({
-    updatedAt: new Date().toISOString(),
-    title: sess.title || content.slice(0, 40)
-  });
+  await sessRef.update({ updatedAt: new Date().toISOString(), title: sess.title || content.slice(0,40) });
 
   res.json({ reply });
 });

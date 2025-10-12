@@ -3,7 +3,7 @@ import express from 'express';
 import cors from 'cors';
 import admin from 'firebase-admin';
 
-// --- Firebase Admin (Render env vars) ---
+// ---- Firebase Admin (Render env) ----
 const saJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
   ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
   : null;
@@ -17,39 +17,23 @@ admin.initializeApp(
 const db = admin.database();
 const app = express();
 
-// --- CORS allow-list (set ALLOWED_ORIGIN in Render) ---
+// ---- CORS ----
 const allowed = (process.env.ALLOWED_ORIGIN || '')
-  .split(',')
-  .map(s => s.trim())
-  .filter(Boolean);
-// e.g. ALLOWED_ORIGIN=https://project1-e7dff.web.app,https://project1-e7dff.firebaseapp.com
-app.use(cors({
+  .split(',').map(s => s.trim()).filter(Boolean);
+
+const corsMw = cors({
   origin: (origin, cb) => cb(null, !origin || allowed.length === 0 || allowed.includes(origin)),
   credentials: true
-}));
-
-app.use(express.json());
-async function authGuard(req, res, next) {
-  const h = req.headers.authorization || '';
-  const token = h.startsWith('Bearer ') ? h.slice(7) : null;
-  if (!token) return res.sendStatus(403);
-  try {
-    const decoded = await admin.auth().verifyIdToken(token);
-    req.user = { uid: decoded.uid };
-    next();
-  } catch {
-    res.sendStatus(403);
-  }
-}
-app.use('/api', (req, res, next) => {
-  if (req.method === 'OPTIONS') return res.sendStatus(204);
-  return authGuard(req, res, next);
 });
-// Root health
+app.use(corsMw);
+app.options('*', corsMw);           // preflight OK for all routes
+app.use(express.json());
+
+// Health
 app.get('/', (_req, res) => res.send('API is running'));
 app.get('/ping', (_req, res) => res.json({ status: 'ok' }));
 
-// --- Auth guard ---
+// ---- Auth guard (single definition) ----
 async function authGuard(req, res, next) {
   const h = req.headers.authorization || '';
   const token = h.startsWith('Bearer ') ? h.slice(7) : null;
@@ -64,8 +48,13 @@ async function authGuard(req, res, next) {
   }
 }
 
-// --- API router mounted under /api ---
+// ---- API router mounted under /api ----
 const api = express.Router();
+
+// short-circuit OPTIONS for /api/*
+api.use((req, res, next) => (req.method === 'OPTIONS' ? res.sendStatus(204) : next()));
+
+// protect all /api/* with auth
 api.use(authGuard);
 
 api.get('/sessions', async (req, res) => {
@@ -95,6 +84,7 @@ api.get('/sessions/:id/messages', async (req, res) => {
 
   const snap = await db.ref(`messagesBySession/${req.params.id}`)
     .orderByChild('createdAt').once('value');
+
   const msgs = [];
   snap.forEach(child => msgs.push({ id: child.key, ...child.val() }));
   res.json(msgs);

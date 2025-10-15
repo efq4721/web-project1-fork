@@ -2,7 +2,6 @@
 import express from 'express';
 import cors from 'cors';
 import admin from 'firebase-admin';
-import OpenAI from 'openai';
 // ---- Firebase Admin (Render env) ----
 const saJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
   ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
@@ -13,13 +12,6 @@ admin.initializeApp(
     ? { credential: admin.credential.cert(saJson), databaseURL: process.env.RTDB_URL }
     : { credential: admin.credential.applicationDefault(), databaseURL: process.env.RTDB_URL }
 );
-// --- OpenAI key guard + client ---
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-if (!OPENAI_API_KEY) {
-  console.error('Missing OPENAI_API_KEY env var. Set it in Render → Settings → Environment (or in your local env).');
-  process.exit(1);
-}
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 const db = admin.database();
 const app = express();

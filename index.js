@@ -176,44 +176,73 @@ async function callGemini({ prompt, model, ver }) {
   if (!KEY) {
     return { status: 500, body: JSON.stringify({ error: "GEMINI_API_KEY not set" }), ct: "application/json" };
   }
+
   const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(KEY)}`;
+
+  // Force plain, short text; add a system nudge; relax safety so benign Qs don’t blank out
+  const body = {
+    systemInstruction: {
+      parts: [{ text: "Answer in plain text only. Keep replies short and direct. Do NOT include hidden reasoning." }]
+    },
+    contents: [{ role: "user", parts: [{ text: prompt }]}],
+    generationConfig: {
+      maxOutputTokens: 128,
+      temperature: 0.4,
+      topK: 64,
+      topP: 0.95,
+      responseMimeType: "text/plain",
+      response_mime_type: "text/plain"
+    },
+    safetySettings: [
+      { category: "HARM_CATEGORY_HARASSMENT",         threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_HATE_SPEECH",        threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",  threshold: "BLOCK_NONE" },
+      { category: "HARM_CATEGORY_DANGEROUS_CONTENT",  threshold: "BLOCK_NONE" }
+    ]
+  };
+
   const r = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }]}],
-      generationConfig: {
-        maxOutputTokens: 256,
-        temperature: 0.7,
-        responseMimeType: "text/plain",
-        response_mime_type: "text/plain"
-      }
-    })
+    body: JSON.stringify(body)
   });
-  const body = await r.text();
+
+  const text = await r.text();
   const ct = r.headers.get("content-type") || "application/json";
-  return { status: r.status, body, ct };
+  return { status: r.status, body: text, ct };
 }
 
-async function generateTextFromGemini(prompt) {
-  // Default to your stable 2.5 Flash; allow env override
-  const base = (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
 
+async function generateTextFromGemini(prompt) {
+  // Your preference: 2.5 first; only fall back when it returns no text
+  const base = (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
   const attempts = [
-    { ver: "v1beta", model: base },                 // 2.5 lives here
-    { ver: "v1beta", model: `${base}-001` },        // if a suffixed variant exists
-    { ver: "v1",     model: "gemini-1.5-flash-001" }, // fallback only if needed
+    { ver: "v1beta", model: base },                   // 2.5 is here
+    { ver: "v1beta", model: `${base}-001` },          // if an -001 exists regionally
+    { ver: "v1",     model: "gemini-1.5-flash-001" }, // visible text fallback
     { ver: "v1",     model: "gemini-1.5-pro-001" }
   ];
 
   for (const a of attempts) {
     const out = await callGemini({ prompt, ...a });
+
+    // Skip hard model-not-found; keep going
     if (out.status === 404) continue;
-    const text = extractGeminiText(out.body);
-    if (text) return text;
+
+    // If we already got text/plain back, use it
+    if ((out.ct || "").includes("text/plain")) {
+      const t = (out.body || "").trim();
+      if (t) return t;
+      continue;
+    }
+
+    // Otherwise parse JSON
+    const t = extractGeminiText(out.body);
+    if (t) return t;
   }
   return "";
 }
+
 
 // ── Test + routes debug ──────────────────────────────────────────────────────
 GET("/test-hf", async (req, res) => {

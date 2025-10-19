@@ -1,4 +1,4 @@
-// server/index.js — Express 5, Firebase RTDB, Gemini replies, static frontend
+// server/index.js — Express 5 + Firebase RTDB + Gemini + static frontend
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,7 +17,7 @@ admin.initializeApp(
 
 const db = admin.database();
 
-// ---------- App & Static ----------
+// ---------- App ----------
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 9188);
@@ -28,14 +28,15 @@ app.use((req, _res, next) => {
   next();
 });
 
-// place your index.html + client.js in /server/public
-const clientDir = path.resolve(__dirname, "public");
-app.use(express.static(clientDir));
+// ---------- Route registry (avoid brittle app._router hacks) ----------
+const ROUTES = [];
+const GET  = (p, ...h) => { ROUTES.push({ method: "GET",  path: p });  return app.get(p,  ...h); };
+const POST = (p, ...h) => { ROUTES.push({ method: "POST", path: p });  return app.post(p, ...h); };
 
 // ---------- Health ----------
-app.get("/ping", (_req, res) => res.json({ ok: true }));
+GET("/ping", (_req, res) => res.json({ ok: true }));
 
-// ---------- Auth guard (Firebase ID token) ----------
+// ---------- Auth guard (Firebase ID token from client) ----------
 async function authGuard(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
@@ -51,7 +52,7 @@ async function authGuard(req, res, next) {
 }
 
 // ---------- Sessions ----------
-app.get("/api/sessions", authGuard, async (req, res) => {
+GET("/api/sessions", authGuard, async (req, res) => {
   const snap = await db
     .ref("sessions")
     .orderByChild("ownerUid")
@@ -64,7 +65,7 @@ app.get("/api/sessions", authGuard, async (req, res) => {
   res.json(list);
 });
 
-app.post("/api/sessions", authGuard, async (req, res) => {
+POST("/api/sessions", authGuard, async (req, res) => {
   const now = new Date().toISOString();
   const ref = db.ref("sessions").push();
   await ref.set({
@@ -77,8 +78,8 @@ app.post("/api/sessions", authGuard, async (req, res) => {
 });
 
 // ---------- Messages (GET + POST) ----------
-// GET (this was missing, causing your 404)
-app.get("/api/sessions/:id/messages", authGuard, async (req, res) => {
+// ✅ This GET handler was missing in your deployed code (causing 404)
+GET("/api/sessions/:id/messages", authGuard, async (req, res) => {
   const sess = (await db.ref(`sessions/${req.params.id}`).once("value")).val();
   if (!sess || sess.ownerUid !== req.user.uid) return res.sendStatus(403);
 
@@ -92,8 +93,8 @@ app.get("/api/sessions/:id/messages", authGuard, async (req, res) => {
   res.json(out);
 });
 
-// POST (save user -> call Gemini -> save assistant)
-app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
+// Save user -> call Gemini -> save assistant -> return reply
+POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
   const { content } = req.body || {};
   if (!content) return res.status(400).json({ error: "content required" });
 
@@ -122,7 +123,7 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
     replyText = "Sorry—LLM is unavailable right now.";
   }
 
-  // 3) store assistant message
+  // 3) store assistant message (text only)
   await msgsRef.push().set({
     ownerUid: req.user.uid,
     role: "assistant",
@@ -208,7 +209,7 @@ function extractGeminiText(raw) {
 }
 
 // ---------- Test route ----------
-app.get("/test-hf", async (req, res) => {
+GET("/test-hf", async (req, res) => {
   const out = await geminiGenerate({
     prompt: req.query.prompt || "Say hello from Gemini!",
     model: req.query.model,
@@ -217,19 +218,12 @@ app.get("/test-hf", async (req, res) => {
   res.status(out.status).type(out.ct).send(out.body);
 });
 
-// ---------- Debug route (before SPA fallback) ----------
-app.get("/__routes", (_req, res) => {
-  const out = [];
-  app._router?.stack?.forEach((layer) => {
-    if (layer.route) {
-      out.push({
-        path: layer.route.path,
-        methods: Object.keys(layer.route.methods),
-      });
-    }
-  });
-  res.json(out);
-});
+// ---------- Debug: list registered routes (reliable) ----------
+GET("/__routes", (_req, res) => res.json(ROUTES));
+
+// ---------- Static frontend (place your index.html + client.js in /server/public) ----------
+const clientDir = path.resolve(__dirname, "public");
+app.use(express.static(clientDir));
 
 // ---------- SPA fallback ----------
 app.use((req, res, next) => {

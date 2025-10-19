@@ -33,7 +33,7 @@ app.use((req, _res, next) => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Route registry (reliable; avoids brittle app._router hacks)
+// Route helpers + registry (reliable; avoids brittle app._router hacks)
 // ──────────────────────────────────────────────────────────────────────────────
 const ROUTES = [];
 const GET  = (p, ...h) => { ROUTES.push({ method: "GET",  path: p });  return app.get(p,  ...h); };
@@ -94,16 +94,24 @@ POST("/api/sessions", authGuard, async (req, res) => {
 // ──────────────────────────────────────────────────────────────────────────────
 GET("/api/sessions/:id/messages", authGuard, async (req, res) => {
   res.set("Cache-Control", "no-store");
+
   const sess = (await db.ref(`sessions/${req.params.id}`).once("value")).val();
   if (!sess || sess.ownerUid !== req.user.uid) return res.sendStatus(403);
 
   const snap = await db
     .ref(`messagesBySession/${req.params.id}`)
-    .orderByChild("createdAt")
     .once("value");
 
   const out = [];
   snap.forEach((c) => out.push({ id: c.key, ...c.val() }));
+
+  // Sort robustly even if some rows lack createdAtMs (handle old data)
+  out.sort((a, b) => {
+    const aa = a.createdAtMs ?? Date.parse(a.createdAt || 0) || 0;
+    const bb = b.createdAtMs ?? Date.parse(b.createdAt || 0) || 0;
+    return aa - bb; // chronological
+  });
+
   res.json(out);
 });
 
@@ -118,26 +126,18 @@ POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
   if (!sess || sess.ownerUid !== req.user.uid) return res.sendStatus(403);
 
   const msgsRef = db.ref(`messagesBySession/${req.params.id}`);
-  const now = new Date().toISOString();
+  const nowIso = new Date().toISOString();
+  const nowMs  = Date.now();
 
   // 1) store user message
   await msgsRef.push().set({
-    ownerUid: req.user.uid, role: "user", content, createdAt: now
+    ownerUid: req.user.uid, role: "user", content, createdAt: nowIso, createdAtMs: nowMs
   });
 
-  // 2) call Gemini
+  // 2) call Gemini (prefer stable text output; fall back until text is found)
   let replyText = "";
   try {
-    // Try configured (default 2.5-flash)
-    const out1 = await geminiGenerate({ prompt: content });
-    replyText = extractGeminiText(out1.body);
-
-    // Fallback: stable 1.5 if 2.5 returns no visible text (thoughts-only / safety)
-    if (!replyText) {
-      const out2 = await geminiGenerate({ prompt: content, model: "gemini-1.5-flash-001", forceVer: "v1" });
-      replyText = extractGeminiText(out2.body);
-    }
-
+    replyText = await generateTextFromGemini(content);
     if (!replyText) replyText = "Sorry—no text came back from the model.";
   } catch (e) {
     console.error("Gemini call failed:", e);
@@ -147,7 +147,7 @@ POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
   // 3) store assistant message (TEXT ONLY)
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "assistant", content: String(replyText),
-    createdAt: new Date().toISOString()
+    createdAt: new Date().toISOString(), createdAtMs: Date.now()
   });
 
   // 4) update session metadata
@@ -160,67 +160,89 @@ POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Gemini helpers
+// Gemini helpers — prefer stable v1 models that return plain text
 // ──────────────────────────────────────────────────────────────────────────────
 function extractGeminiText(raw) {
+  // If it's already plain text, just trim and return
+  if (typeof raw === "string" && (raw[0] !== "{" && raw[0] !== "[")) {
+    return raw.trim();
+  }
   try {
     const j = JSON.parse(raw);
+
+    // v1 generateContent typical shape
     const parts = j?.candidates?.[0]?.content?.parts;
-    let txt = "";
-    if (Array.isArray(parts)) txt = parts.map(p => p?.text || "").join("").trim();
-    if (!txt && typeof j?.output_text === "string") txt = j.output_text.trim();
-    return txt;
-  } catch {
+    if (Array.isArray(parts)) {
+      const txt = parts.map(p => p?.text || "").join("").trim();
+      if (txt) return txt;
+    }
+
+    // Some responses expose a convenience field
+    if (typeof j?.output_text === "string" && j.output_text.trim()) {
+      return j.output_text.trim();
+    }
+
+    // Nothing usable
     return "";
+  } catch {
+    // raw wasn’t JSON → treat as text
+    return (raw || "").toString().trim();
   }
 }
 
-async function geminiGenerate({ prompt, model, forceVer }) {
+async function callGemini({ prompt, model, ver }) {
   const KEY = process.env.GEMINI_API_KEY;
   if (!KEY) {
     return { status: 500, body: JSON.stringify({ error: "GEMINI_API_KEY not set" }), ct: "application/json" };
   }
+  const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(KEY)}`;
+  const r = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: prompt }]}],
+      generationConfig: {
+        maxOutputTokens: 256,
+        temperature: 0.7,
+        // Force visible text instead of hidden "thoughts"
+        responseMimeType: "text/plain",
+        response_mime_type: "text/plain"
+      }
+    })
+  });
+  const body = await r.text();
+  const ct = r.headers.get("content-type") || "application/json";
+  return { status: r.status, body, ct };
+}
 
-  const base = (model || process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
-  const models = [base, `${base}-001`, "gemini-1.5-flash-001", "gemini-1.5-pro-001", "gemini-pro"]
-    .filter((v, i, a) => v && a.indexOf(v) === i);
-  const versions = forceVer ? [forceVer] : ["v1", "v1beta"];
+async function generateTextFromGemini(prompt) {
+  // Prefer stable text-first models; only try 2.x if needed
+  const DEFAULT = (process.env.GEMINI_MODEL || "").replace(/^models\//, "") || "gemini-1.5-flash-001";
 
-  for (const ver of versions) {
-    for (const m of models) {
-      const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(KEY)}`;
-      const r = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }]}],
-          // Strong hint for plain text back (support both spellings)
-          generationConfig: {
-            maxOutputTokens: 256,
-            temperature: 0.7,
-            responseMimeType: "text/plain",
-            response_mime_type: "text/plain"
-          }
-        })
-      });
-      const body = await r.text();
-      const ct = r.headers.get("content-type") || "application/json";
-      if (r.status !== 404) return { status: r.status, body, ct, model: m, ver };
-    }
+  const attempts = [
+    { ver: "v1",     model: DEFAULT },
+    { ver: "v1",     model: "gemini-1.5-pro-001" },
+    { ver: "v1",     model: "gemini-pro" },
+    { ver: "v1beta", model: DEFAULT },
+    { ver: "v1beta", model: "gemini-2.5-flash" } // last resort
+  ];
+
+  for (const a of attempts) {
+    const out = await callGemini({ prompt, ...a });
+    if (out.status === 404) continue;
+    const text = extractGeminiText(out.body);
+    if (text) return text;
   }
-  return { status: 404, body: JSON.stringify({ error: "Model not found on v1 or v1beta" }, null, 2), ct: "application/json" };
+  return "";
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Test route (manual ping of Gemini)
 // ──────────────────────────────────────────────────────────────────────────────
 GET("/test-hf", async (req, res) => {
-  const out = await geminiGenerate({
-    prompt: req.query.prompt || "Say hello from Gemini!",
-    model: req.query.model,
-    forceVer: req.query.ver,
-  });
-  res.status(out.status).type(out.ct).send(out.body);
+  const text = await generateTextFromGemini(req.query.prompt || "Say hello from Gemini!");
+  if (!text) return res.status(502).json({ error: "No text from Gemini" });
+  res.type("text/plain").send(text);
 });
 
 // Debug: list registered routes

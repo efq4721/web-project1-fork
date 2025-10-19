@@ -67,15 +67,65 @@ app.post("/api/sessions", authGuard, async (req, res) => {
   res.json({ id: ref.key });
 });
 
-app.get("/api/sessions/:id/messages", authGuard, async (req, res) => {
-  const sess = (await db.ref(`sessions/${req.params.id}`).once("value")).val();
-  if (!sess || sess.ownerUid !== req.user.uid) return res.sendStatus(403);
+// ---- Send message: save user msg -> call Gemini -> save assistant msg
+app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
+  const { content } = req.body || {};
+  if (!content) return res.status(400).json({ error: "content required" });
 
-  const snap = await db.ref(`messagesBySession/${req.params.id}`).orderByChild("createdAt").once("value");
-  const out = [];
-  snap.forEach(child => out.push({ id: child.key, ...child.val() }));
-  res.json(out);
+  try {
+    const sessRef = db.ref(`sessions/${req.params.id}`);
+    const sess = (await sessRef.once("value")).val();
+    if (!sess || sess.ownerUid !== req.user.uid) return res.sendStatus(403);
+
+    const msgsRef = db.ref(`messagesBySession/${req.params.id}`);
+    const now = new Date().toISOString();
+
+    // 1) store user message
+    const userMsg = { ownerUid: req.user.uid, role: "user", content, createdAt: now };
+    await msgsRef.push().set(userMsg);
+
+    // 2) call Gemini (never throw out)
+    let replyText = "";
+    try {
+      const out = await geminiGenerate({ prompt: content });
+      console.log("Gemini status:", out.status, "model/ver:", out.model, out.ver);
+
+      // prefer parsed JSON if available
+      if ((out.ct || "").includes("application/json")) {
+        try {
+          const j = JSON.parse(out.body);
+          replyText = j?.candidates?.[0]?.content?.parts?.[0]?.text ?? JSON.stringify(j);
+        } catch {
+          replyText = out.body;
+        }
+      } else {
+        replyText = out.body;
+      }
+
+      if (!replyText) replyText = "Sorry—no text was returned.";
+    } catch (e) {
+      console.error("Gemini call failed:", e);
+      replyText = "Sorry—LLM is unavailable right now.";
+    }
+
+    // 3) store assistant message
+    const botMsg = { ownerUid: req.user.uid, role: "assistant", content: String(replyText), createdAt: new Date().toISOString() };
+    await msgsRef.push().set(botMsg);
+
+    // 4) update session metadata
+    await sessRef.update({
+      updatedAt: new Date().toISOString(),
+      title: (sess.title && sess.title.trim()) ? sess.title : content.slice(0, 40)
+    });
+
+    // 5) respond
+    res.json({ ok: true, assistant: botMsg.content });
+  } catch (err) {
+    console.error("POST /sessions/:id/messages error:", err);
+    res.status(500).json({ error: "server error" });
+  }
 });
+
 
 // ---- Gemini integration ----
 function stripModelsPrefix(m) { return m?.startsWith("models/") ? m.slice(7) : m; }

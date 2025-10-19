@@ -85,28 +85,16 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
     await msgsRef.push().set(userMsg);
 
     // 2) call Gemini (never throw out)
+    // call Gemini
     let replyText = "";
     try {
       const out = await geminiGenerate({ prompt: content });
-      console.log("Gemini status:", out.status, "model/ver:", out.model, out.ver);
-
-      // prefer parsed JSON if available
-      if ((out.ct || "").includes("application/json")) {
-        try {
-          const j = JSON.parse(out.body);
-          replyText = j?.candidates?.[0]?.content?.parts?.[0]?.text ?? JSON.stringify(j);
-        } catch {
-          replyText = out.body;
-        }
-      } else {
-        replyText = out.body;
-      }
-
-      if (!replyText) replyText = "Sorry—no text was returned.";
+      replyText = extractGeminiText(out.body);
     } catch (e) {
       console.error("Gemini call failed:", e);
       replyText = "Sorry—LLM is unavailable right now.";
     }
+
 
     // 3) store assistant message
     const botMsg = { ownerUid: req.user.uid, role: "assistant", content: String(replyText), createdAt: new Date().toISOString() };
@@ -163,6 +151,17 @@ async function geminiGenerate({ prompt, model, forceVer }) {
   }
 
   return { status: 404, body: JSON.stringify({ error: "Model not found on v1 or v1beta" }, null, 2), ct: "application/json" };
+}
+function extractGeminiText(raw) {
+  // raw is a JSON string from the API
+  try {
+    const j = JSON.parse(raw);
+    const parts = j?.candidates?.[0]?.content?.parts || [];
+    const text = parts.map(p => p?.text || "").join("").trim();
+    return text || raw; // fall back to raw if empty
+  } catch {
+    return raw; // if not JSON, just return as-is
+  }
 }
 
 // ---- Send message: save user msg -> call Gemini -> save assistant msg

@@ -1,0 +1,14 @@
+{
+  "name": "web-chat-api-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node index.js",
+    "build:public": "mkdir -p public && cp -r ../client/* public/ || (powershell -NoProfile -Command \"New-Item -ItemType Directory -Force -Path public | Out-Null; Copy-Item ..\\client\\* -Destination .\\public -Recurse -Force\")"
+  },
+  "dependencies": {
+    "express": "^5.0.0"
+  }
+}

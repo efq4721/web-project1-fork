@@ -107,105 +107,113 @@ POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
 
   // 1) store user message
   await msgsRef.push().set({
-    ownerUid: req.user.uid,
-    role: "user",
-    content,
-    createdAt: now,
+    ownerUid: req.user.uid, role: "user", content, createdAt: now
   });
 
   // 2) call Gemini
   let replyText = "";
   try {
-    const out = await geminiGenerate({ prompt: content });
-    replyText = extractGeminiText(out.body);
+    // First: whatever model is configured (default 2.5-flash)
+    const out1 = await geminiGenerate({ prompt: content });
+    replyText = extractGeminiText(out1.body);
+
+    // Fallback: stable 1.5 if no visible text (e.g., MAX_TOKENS consumed by "thoughts")
+    if (!replyText) {
+      const out2 = await geminiGenerate({ prompt: content, model: "gemini-1.5-flash-001", forceVer: "v1" });
+      replyText = extractGeminiText(out2.body);
+    }
+
+    if (!replyText) replyText = "Sorry—no text came back from the model.";
   } catch (e) {
     console.error("Gemini call failed:", e);
     replyText = "Sorry—LLM is unavailable right now.";
   }
 
-  // 3) store assistant message (text only)
+  // 3) store assistant message (TEXT ONLY)
   await msgsRef.push().set({
-    ownerUid: req.user.uid,
-    role: "assistant",
-    content: String(replyText),
-    createdAt: new Date().toISOString(),
+    ownerUid: req.user.uid, role: "assistant", content: String(replyText),
+    createdAt: new Date().toISOString()
   });
 
   // 4) update session metadata
   await sessRef.update({
     updatedAt: new Date().toISOString(),
-    title: sess.title?.trim() ? sess.title : content.slice(0, 40),
+    title: sess.title?.trim() ? sess.title : content.slice(0, 40)
   });
 
   res.json({ reply: replyText });
 });
+
 
 // ---------- Gemini ----------
 function stripModelsPrefix(m) {
   return m?.startsWith("models/") ? m.slice(7) : m;
 }
 
+function extractGeminiText(raw) {
+  try {
+    const j = JSON.parse(raw);
+
+    // New Gemini format: candidates[].content.parts[].text
+    let text = "";
+    const parts = j?.candidates?.[0]?.content?.parts;
+    if (Array.isArray(parts)) {
+      text = parts.map(p => (p?.text || "")).join("").trim();
+    }
+
+    // Some variants use output_text (older helpers)
+    if (!text && typeof j?.output_text === "string") {
+      text = j.output_text.trim();
+    }
+
+    return text; // may be "" if no visible text
+  } catch {
+    return "";
+  }
+}
+
 async function geminiGenerate({ prompt, model, forceVer }) {
   const KEY = process.env.GEMINI_API_KEY;
-  if (!KEY)
-    return {
-      status: 500,
-      body: JSON.stringify({ error: "GEMINI_API_KEY not set" }),
-      ct: "application/json",
-    };
+  if (!KEY) {
+    return { status: 500, body: JSON.stringify({ error: "GEMINI_API_KEY not set" }), ct: "application/json" };
+  }
 
-  const base = stripModelsPrefix(model || process.env.GEMINI_MODEL || "gemini-2.5-flash");
-  const candidates = Array.from(
-    new Set(
-      [
-        base,
-        base && !base.endsWith("-001") ? `${base}-001` : base,
-        "gemini-1.5-flash-001",
-        "gemini-1.5-pro-001",
-        "gemini-pro",
-      ].filter(Boolean)
-    )
-  );
+  const base = (model || process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
+  // Try base, then a couple of stable fallbacks
+  const models = [base, `${base}-001`, "gemini-1.5-flash-001", "gemini-1.5-pro-001", "gemini-pro"]
+    .filter((v, i, a) => v && a.indexOf(v) === i);
 
   const versions = forceVer ? [forceVer] : ["v1", "v1beta"];
 
   for (const ver of versions) {
-    for (const m of candidates) {
-      const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(
-        m
-      )}:generateContent?key=${encodeURIComponent(KEY)}`;
-
+    for (const m of models) {
+      const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(m)}:generateContent?key=${encodeURIComponent(KEY)}`;
       const r = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contents: [{ role: "user", parts: [{ text: prompt }]}],
-          generationConfig: { maxOutputTokens: 256, temperature: 0.8 },
-        }),
+          // Force plain text back; support both spellings used across releases
+          generationConfig: {
+            maxOutputTokens: 256,
+            temperature: 0.7,
+            responseMimeType: "text/plain",
+            response_mime_type: "text/plain"
+          }
+        })
       });
 
-      const text = await r.text();
+      const body = await r.text();
       const ct = r.headers.get("content-type") || "application/json";
-      if (r.status !== 404) return { status: r.status, body: text, ct, model: m, ver };
+
+      // If not a 404, return what we got (we'll decide on text later)
+      if (r.status !== 404) {
+        return { status: r.status, body, ct, model: m, ver };
+      }
     }
   }
 
-  return {
-    status: 404,
-    body: JSON.stringify({ error: "Model not found on v1 or v1beta" }, null, 2),
-    ct: "application/json",
-  };
-}
-
-function extractGeminiText(raw) {
-  try {
-    const j = JSON.parse(raw);
-    const parts = j?.candidates?.[0]?.content?.parts || [];
-    const text = parts.map((p) => p?.text || "").join("").trim();
-    return text || raw;
-  } catch {
-    return raw;
-  }
+  return { status: 404, body: JSON.stringify({ error: "Model not found on v1 or v1beta" }, null, 2), ct: "application/json" };
 }
 
 // ---------- Test route ----------

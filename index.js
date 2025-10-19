@@ -1,12 +1,10 @@
-// server/index.js — Express 5 + Firebase RTDB + Gemini + static frontend (ESM)
+// server/index.js — Express 5 + Firebase RTDB + Gemini 2.5 + static frontend (ESM)
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import admin from "firebase-admin";
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Firebase Admin
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Firebase Admin ────────────────────────────────────────────────────────────
 const saJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
   ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
   : null;
@@ -19,9 +17,7 @@ admin.initializeApp(
 
 const db = admin.database();
 
-// ──────────────────────────────────────────────────────────────────────────────
-// App
-// ──────────────────────────────────────────────────────────────────────────────
+// ── App ───────────────────────────────────────────────────────────────────────
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 9188);
@@ -32,17 +28,15 @@ app.use((req, _res, next) => {
   next();
 });
 
-// Route registry (so /__routes works consistently)
+// Simple route registry (so /__routes is reliable)
 const ROUTES = [];
 const GET  = (p, ...h) => { ROUTES.push({ method: "GET",  path: p });  return app.get(p,  ...h); };
 const POST = (p, ...h) => { ROUTES.push({ method: "POST", path: p });  return app.post(p, ...h); };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Health
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Health ───────────────────────────────────────────────────────────────────
 GET("/ping", (_req, res) => res.json({ ok: true }));
 
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Auth guard (Firebase ID token) ───────────────────────────────────────────
 async function authGuard(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
@@ -57,9 +51,7 @@ async function authGuard(req, res, next) {
   }
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Sessions
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Sessions ─────────────────────────────────────────────────────────────────
 GET("/api/sessions", authGuard, async (req, res) => {
   res.set("Cache-Control", "no-store");
   const snap = await db
@@ -91,9 +83,7 @@ POST("/api/sessions", authGuard, async (req, res) => {
   res.json({ id: ref.key });
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Messages (GET + POST)
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Messages (GET + POST) ────────────────────────────────────────────────────
 GET("/api/sessions/:id/messages", authGuard, async (req, res) => {
   res.set("Cache-Control", "no-store");
 
@@ -102,9 +92,10 @@ GET("/api/sessions/:id/messages", authGuard, async (req, res) => {
 
   const snap = await db.ref(`messagesBySession/${req.params.id}`).once("value");
   const out = [];
-  snap.forEach((c) => out.push({ id: c.key, ...c.val() }));
+  // IMPORTANT: use braces so callback returns undefined (keeps iterating)
+  snap.forEach((c) => { out.push({ id: c.key, ...c.val() }); });
 
-  // Sort chronologically using createdAtMs if present, else parse createdAt
+  // sort chronologically by ms, fallback to parsed ISO
   out.sort((a, b) => {
     const ta = (a.createdAtMs != null) ? a.createdAtMs :
                ((a.createdAt ? Date.parse(a.createdAt) : 0) || 0);
@@ -129,12 +120,12 @@ POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
   const nowIso = new Date().toISOString();
   const nowMs  = Date.now();
 
-  // 1) store user message
+  // 1) user message
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "user", content, createdAt: nowIso, createdAtMs: nowMs
   });
 
-  // 2) call Gemini (prefer 2.5 Flash; fall back only if needed)
+  // 2) Gemini reply (default 2.5; fallback only if 2.5 yields no visible text)
   let replyText = "";
   try {
     replyText = await generateTextFromGemini(content);
@@ -144,13 +135,13 @@ POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
     replyText = "Sorry—LLM is unavailable right now.";
   }
 
-  // 3) store assistant message
+  // 3) assistant message (TEXT ONLY)
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "assistant", content: String(replyText),
     createdAt: new Date().toISOString(), createdAtMs: Date.now()
   });
 
-  // 4) update session metadata
+  // 4) session metadata
   await sessRef.update({
     updatedAt: new Date().toISOString(),
     title: (sess.title && sess.title.trim()) ? sess.title : content.slice(0, 40)
@@ -159,13 +150,10 @@ POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
   res.json({ reply: replyText });
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Gemini helpers — default to 2.5 Flash (your preference), with smart fallback
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Gemini (2.5 first, with forced text output) ──────────────────────────────
 function extractGeminiText(raw) {
-  // If plain text, return as-is
   if (typeof raw === "string" && raw.length && raw[0] !== "{" && raw[0] !== "[") {
-    return raw.trim();
+    return raw.trim(); // already plain text
   }
   try {
     const j = JSON.parse(raw);
@@ -197,7 +185,6 @@ async function callGemini({ prompt, model, ver }) {
       generationConfig: {
         maxOutputTokens: 256,
         temperature: 0.7,
-        // Force visible text (avoid thoughts-only payloads)
         responseMimeType: "text/plain",
         response_mime_type: "text/plain"
       }
@@ -213,11 +200,10 @@ async function generateTextFromGemini(prompt) {
   const base = (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
 
   const attempts = [
-    { ver: "v1beta", model: base },                 // preferred (2.5 lives here)
-    { ver: "v1beta", model: `${base}-001` },        // if there is a suffixed stable
-    { ver: "v1",     model: "gemini-1.5-flash-001" }, // fallback to stable 1.5
-    { ver: "v1",     model: "gemini-1.5-pro-001" },
-    { ver: "v1",     model: "gemini-pro" }
+    { ver: "v1beta", model: base },                 // 2.5 lives here
+    { ver: "v1beta", model: `${base}-001` },        // if a suffixed variant exists
+    { ver: "v1",     model: "gemini-1.5-flash-001" }, // fallback only if needed
+    { ver: "v1",     model: "gemini-1.5-pro-001" }
   ];
 
   for (const a of attempts) {
@@ -229,9 +215,7 @@ async function generateTextFromGemini(prompt) {
   return "";
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Test + routes debug
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Test + routes debug ──────────────────────────────────────────────────────
 GET("/test-hf", async (req, res) => {
   const text = await generateTextFromGemini(req.query.prompt || "Say hello from Gemini!");
   if (!text) return res.status(502).json({ error: "No text from Gemini" });
@@ -239,9 +223,7 @@ GET("/test-hf", async (req, res) => {
 });
 GET("/__routes", (_req, res) => res.json(ROUTES));
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Static frontend (index.html + client.js go in /server/public)
-// ──────────────────────────────────────────────────────────────────────────────
+// ── Static frontend (index.html + client.js in /server/public) ───────────────
 const clientDir = path.resolve(__dirname, "public");
 app.use(express.static(clientDir));
 

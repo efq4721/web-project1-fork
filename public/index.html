@@ -1,0 +1,23 @@
+<!doctype html><html><body>
+<main id="app"></main>
+
+<script type="text/x-template" id="tpl-login">
+  <h1>Sign in</h1>
+  <button id="btn-google">Sign in with Google</button>
+</script>
+
+<script type="text/x-template" id="tpl-chat">
+  <h1>Your Chats</h1>
+  <button id="btn-new">New Chat</button>
+  <button id="btn-logout">Log out</button>
+  <ul id="session-list"></ul>
+</script>
+
+<script type="text/x-template" id="tpl-chat-detail">
+  <a href="#/chat">← Back</a>
+  <div id="messages"></div>
+  <form id="msg-form"><input id="msg" placeholder="Say something…"><button>Send</button></form>
+</script>
+
+<script type="module" src="./client.js"></script>
+</body></html>

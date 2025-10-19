@@ -230,7 +230,19 @@ app.use((req, res, next) => {
   }
   next();
 });
-
+// DEBUG: list mounted routes
+app.get("/__routes", (_req, res) => {
+  const out = [];
+  app._router?.stack?.forEach((layer) => {
+    if (layer.route) {
+      out.push({
+        path: layer.route.path,
+        methods: Object.keys(layer.route.methods),
+      });
+    }
+  });
+  res.json(out);
+});
 // ---- 404 last
 app.use((_req, res) => res.status(404).send("Not Found"));
 

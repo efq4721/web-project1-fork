@@ -1,55 +1,181 @@
+/* ===============================
+   FGC Chat – Dark Purple Theme
+   =============================== */
+
 :root{
-  --bg:#0f0b14;             /* page */
-  --text:#EDE8FF;           /* main text */
-  --muted:#C7B9FF;
-  --bubble-ai:#20112F;      /* assistant bubble */
-  --bubble-you:#15202B;     /* user bubble */
-  --accent:#A78BFA;         /* purple */
+  --bg: #0f0b14;           /* page background */
+  --text: #EDE8FF;         /* primary text */
+  --muted: #C7B9FF;        /* subtle text */
+  --accent: #A78BFA;       /* purple accent */
+  --accent-2: #7C6EF6;
+
+  --bubble-ai: #20112F;    /* assistant bubble */
+  --bubble-you:#15202B;    /* user bubble */
+
+  --line: rgba(255,255,255,.08);
+  --card: rgba(255,255,255,.04);
 }
 
+/* ---- Base / reset ---- */
+*{ box-sizing: border-box; }
+html,body{ height:100%; }
 body{
-  background: radial-gradient(1200px 800px at 20% -10%, #1b0f2d 0, #0f0b14 35%, #0a0810 100%);
+  margin:0;
+  font: 16px/1.55 system-ui, -apple-system, Segoe UI, Roboto, Inter, "Helvetica Neue", Arial, "Apple Color Emoji","Segoe UI Emoji";
   color: var(--text);
+  background:
+    radial-gradient(1200px 800px at 20% -10%, #1b0f2d 0, #0f0b14 35%, #0a0810 100%);
+}
+img{ max-width:100%; display:block; }
+a{ color: var(--accent); text-decoration: none; }
+a:hover{ text-decoration: underline; }
+
+/* ---- App shells (works whether you have one or two panes) ---- */
+#app{
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: 280px 1fr; /* if sidebar exists */
+}
+@media (max-width: 960px){
+  #app{ grid-template-columns: 1fr; }
 }
 
+/* Optional wrappers (if you add them); selectors also target raw elements by ID so it still looks good without wrappers */
+.sidebar{
+  border-right: 1px solid var(--line);
+  padding: 18px 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,0) 40%);
+}
+.main{
+  position: relative;
+  min-height: 100dvh;
+  padding: 20px 0 0;
+}
+
+/* ---- Buttons / chips ---- */
+.btn, button{
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
+  color: #0b0612;
+  border: 0;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-weight: 700;
+  letter-spacing:.2px;
+  cursor: pointer;
+  box-shadow: 0 6px 20px rgba(167,139,250,.25);
+}
+.btn.secondary{
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+button:disabled{ opacity:.6; cursor:not-allowed; }
+button:hover{ filter: brightness(1.03); }
+
+/* ---- Chat list (tpl-chat) ---- */
+#session-list{
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+#session-list li a{
+  display: block;
+  background: var(--card);
+  border: 1px solid var(--line);
+  color: var(--text);
+  padding: 10px 12px;
+  border-radius: 10px;
+}
+#session-list li a:hover{
+  background: rgba(167,139,250,.12);
+  border-color: rgba(167,139,250,.35);
+}
+#session-list small{
+  color: var(--muted);
+  display:block;
+  margin-top: 2px;
+}
+
+/* ---- Headers / welcome ---- */
+h1,h2,h3{ margin: 0 0 10px; line-height:1.25; }
+h1{ font-size: 2rem; }
+.muted{ color: var(--muted); }
+
+/* ---- Messages area ---- */
 #messages{
-  display:flex; flex-direction:column; gap:12px;
-  padding:16px 16px 120px;   /* give room above input bar */
+  /* set height so it scrolls and leaves space for composer */
+  height: calc(100dvh - 160px);
+  overflow: auto;
+  padding: 16px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.msg{ display:flex; gap:10px; align-items:flex-start; }
-.msg .who{ width:34px; text-align:right; padding-top:6px; color:var(--muted); font-weight:600; }
+/* A single message row */
+.msg{
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
 
+/* “You” / “🤖” label */
+.msg .who{
+  width: 34px;
+  text-align: right;
+  padding-top: 6px;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+/* Bubble shell – IMPORTANT: solid background and overflow hidden so inner markdown never “resets” colors */
 .msg .msg-body{
   background: var(--bubble-ai);
   border: 1px solid rgba(167,139,250,.25);
   border-radius: 14px;
   padding: 12px 14px;
   max-width: min(860px, 100%);
-  overflow: hidden;            /* clip children so corners stay clean */
+  overflow: hidden; /* clip children so rounded corners stay clean */
 }
 
+/* User bubble variant */
 .msg.you .msg-body{
   background: var(--bubble-you);
-  border-color: rgba(255,255,255,.08);
+  border-color: var(--line);
 }
 
-/* keep Markdown children transparent so the bubble color is consistent */
+/* Keep markdown children transparent so the bubble color is consistent */
 .msg .msg-body > *{ background: transparent !important; }
 
-/* slightly styled lists/code so they don’t look like “new panels” */
+/* Markdown cosmetics inside bubbles */
+.msg .msg-body p{ margin: 0 0 10px; }
+.msg .msg-body p:last-child{ margin-bottom:0; }
 .msg .msg-body ul{ margin: 6px 0 10px 22px; }
 .msg .msg-body li{ margin: 4px 0; }
-.msg .msg-body pre{
-  background: rgba(255,255,255,.06);
-  padding: 10px; border-radius: 10px; overflow:auto;
+.msg .msg-body h1,
+.msg .msg-body h2,
+.msg .msg-body h3{
+  margin: 6px 0 6px;
 }
 .msg .msg-body code{
   background: rgba(255,255,255,.06);
-  padding: 1px 5px; border-radius: 6px;
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+.msg .msg-body pre{
+  background: rgba(255,255,255,.06);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  overflow: auto;
 }
 
-/* Typing indicator */
+/* Typing indicator bubble */
 .typing{ display:inline-flex; gap:6px; align-items:center; height:1em; }
 .typing .dot{
   width:6px; height:6px; border-radius:50%;
@@ -58,3 +184,44 @@ body{
 .typing .dot:nth-child(2){ animation-delay:.15s }
 .typing .dot:nth-child(3){ animation-delay:.30s }
 @keyframes blink{ 0%,80%,100%{opacity:.25} 40%{opacity:1} }
+
+/* ---- Composer (sticky at bottom of main) ---- */
+#composer{
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background:
+    linear-gradient(180deg, rgba(15,11,20,0), rgba(15,11,20,.92) 30%);
+  padding: 10px 16px 18px;
+  border-top: 1px solid var(--line);
+}
+
+#msg-form{
+  display:flex;
+  gap: 10px;
+  align-items: center;
+}
+
+#msg{
+  flex: 1;
+  background: rgba(255,255,255,.06);
+  color: var(--text);
+  border: 1px solid rgba(255,255,255,.15);
+  border-radius: 12px;
+  padding: 12px 14px;
+  outline: none;
+}
+#msg::placeholder{ color: #bfb6e8; }
+#msg:focus{
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(167,139,250,.25);
+}
+
+#msg-form button{
+  min-width: 84px;
+}
+
+/* ---- Utility spacing for simple templates (no wrappers) ---- */
+#app > h1,
+#app > .welcome,
+#app > .muted{ padding: 16px; }

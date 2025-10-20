@@ -21,7 +21,6 @@ const db = admin.database();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 9188);
-const DEBUG = String(process.env.DEBUG_GEMINI || "0") === "1";
 
 app.use(express.json());
 app.use((req, _res, next) => {
@@ -55,6 +54,7 @@ app.get("/api/sessions", authGuard, async (req, res) => {
     .orderByChild("ownerUid")
     .equalTo(req.user.uid)
     .once("value");
+
   const val = snap.val() || {};
   const list = Object.entries(val)
     .map(([id, v]) => ({ id, ...v }))
@@ -63,6 +63,7 @@ app.get("/api/sessions", authGuard, async (req, res) => {
       const tb = b.updatedAt ? Date.parse(b.updatedAt) : (b.createdAt ? Date.parse(b.createdAt) : 0);
       return tb - ta; // newest first
     });
+
   res.json(list);
 });
 
@@ -75,7 +76,7 @@ app.post("/api/sessions", authGuard, async (req, res) => {
     title: req.body?.title || "New chat",
     createdAt: now,
     updatedAt: now,
-    // If you want per-session system prompts someday:
+    // per-session prompt later if you want:
     // systemPrompt: req.body?.systemPrompt || null
   });
   res.json({ id: ref.key });
@@ -89,9 +90,11 @@ app.get("/api/sessions/:id/messages", authGuard, async (req, res) => {
   if (!sess || sess.ownerUid !== req.user.uid) return res.sendStatus(403);
 
   const snap = await db.ref(`messagesBySession/${req.params.id}`).once("value");
+
   const out = [];
   snap.forEach(c => { out.push({ id: c.key, ...c.val() }); });
 
+  // chronological
   out.sort((a, b) => {
     const ta = (a.createdAtMs != null) ? a.createdAtMs : (a.createdAt ? Date.parse(a.createdAt) : 0);
     const tb = (b.createdAtMs != null) ? b.createdAtMs : (b.createdAt ? Date.parse(b.createdAt) : 0);
@@ -114,33 +117,33 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
   const nowIso = new Date().toISOString();
   const nowMs  = Date.now();
 
-  // 1) user message
+  // 1) store user message
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "user", content, createdAt: nowIso, createdAtMs: nowMs
   });
 
-  // 2) Gemini reply (SYSTEM_INSTRUCTION is the only style/length control)
+  // 2) build reply using ONLY SYSTEM_INSTRUCTION from env (or per-session if you later add it)
   const systemText =
     (sess?.systemPrompt && String(sess.systemPrompt).trim()) ||
     (process.env.SYSTEM_INSTRUCTION || "").trim() ||
-    ""; // exactly what you set in Render
+    "";
 
   let replyText = "";
   try {
     replyText = await generateTextFromGemini(content, systemText);
-    if (!replyText) replyText = "Sorry — no text came back from the model."; // very rare with settings below
+    if (!replyText) replyText = "Sorry — no text came back from the model.";
   } catch (e) {
     console.error("Gemini call failed:", e);
     replyText = "Sorry — LLM is unavailable right now.";
   }
 
-  // 3) assistant message
+  // 3) store assistant message
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "assistant", content: String(replyText),
     createdAt: new Date().toISOString(), createdAtMs: Date.now()
   });
 
-  // 4) session metadata
+  // 4) update session metadata
   await sessRef.update({
     updatedAt: new Date().toISOString(),
     title: (sess.title && sess.title.trim()) ? sess.title : content.slice(0, 40)
@@ -149,7 +152,7 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
   res.json({ reply: replyText });
 });
 
-// ── Gemini helpers (2.5 Pro-first, plain text, minimal constraints) ──────────
+// ── Gemini helpers (2.5-first, “continue” loop, plain text) ───────────────────
 function extractGeminiText(raw, ct) {
   if (ct && ct.includes("text/plain")) return (raw || "").toString().trim();
   if (typeof raw === "string" && raw.length && raw[0] !== "{" && raw[0] !== "[") {
@@ -171,26 +174,23 @@ function extractGeminiText(raw, ct) {
   }
 }
 
-async function callGeminiJSON({ history, model, ver, systemText }) {
+async function callGeminiOnce({ prompt, model, ver, systemText }) {
   const KEY = process.env.GEMINI_API_KEY;
-  if (!KEY) return { status: 500, json: { error: "GEMINI_API_KEY not set" }, ct: "application/json" };
+  if (!KEY) return { status: 500, body: JSON.stringify({ error: "GEMINI_API_KEY not set" }), ct: "application/json" };
 
   const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(KEY)}`;
 
   const body = {
     systemInstruction: systemText ? { parts: [{ text: systemText }] } : undefined,
-    contents: history, // multi-turn history (user/model)
+    contents: [{ role: "user", parts: [{ text: prompt }]}],
     generationConfig: {
-      // Bigger cap so it can actually finish long answers
       maxOutputTokens: 2048,
       temperature: 0.7,
       topK: 64,
       topP: 0.95,
-      // Ask for JSON so we can read finishReason and loop
       responseMimeType: "text/plain",
       response_mime_type: "text/plain"
     },
-    // Loosen safety so benign FGC content doesn't get blanked
     safetySettings: [
       { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_NONE" },
       { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_NONE" },
@@ -201,12 +201,17 @@ async function callGeminiJSON({ history, model, ver, systemText }) {
 
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const text = await r.text();
-  let json;
-  try { json = JSON.parse(text); } catch { json = { raw: text }; }
   const ct = r.headers.get("content-type") || "application/json";
-  return { status: r.status, json, ct };
-}
 
+  // try to read finishReason if JSON
+  let finish = "";
+  try {
+    const j = JSON.parse(text);
+    finish = j?.candidates?.[0]?.finishReason || j?.candidates?.[0]?.finish_reason || "";
+  } catch {}
+
+  return { status: r.status, body: text, ct, finish };
+}
 
 async function generateTextFromGemini(originalPrompt, systemText) {
   const base = (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
@@ -217,36 +222,25 @@ async function generateTextFromGemini(originalPrompt, systemText) {
 
   for (const ver of versions) {
     for (const m of models) {
-      // Start the conversation with just your user prompt
-      let history = [{ role: "user", parts: [{ text: originalPrompt }]}];
+      let prompt = originalPrompt;
       let acc = "";
 
-      for (let i = 0; i < 4; i++) { // up to 4 segments if the model keeps hitting MAX_TOKENS
-        const out = await callGeminiJSON({ history, model: m, ver, systemText });
+      // up to 4 continuations if model stops on MAX_TOKENS
+      for (let i = 0; i < 4; i++) {
+        const out = await callGeminiOnce({ prompt, model: m, ver, systemText });
         if (out.status === 404 || out.status === 401 || out.status === 403) break; // try next model
-        const cand = out.json?.candidates?.[0];
-        const parts = cand?.content?.parts || [];
-        const chunk = parts.map(p => p?.text || "").join("");
-        const finish = cand?.finishReason || cand?.finish_reason || "";
-
-        if (chunk) {
-          acc += (acc ? "\n\n" : "") + chunk;
-          // Continue the conversation so the next call can pick up where it stopped
-          history.push({ role: "model", parts: [{ text: chunk }] });
-        }
-
-        if (finish !== "MAX_TOKENS") break; // done (STOP/SAFETY/etc.)
-        // Ask it to continue
-        history.push({ role: "user", parts: [{ text: "Continue." }] });
+        const chunk = extractGeminiText(out.body, out.ct);
+        if (chunk) acc += (acc ? "\n\n" : "") + chunk;
+        if (out.finish !== "MAX_TOKENS") break;
+        prompt = "Continue.";
       }
 
-      if (acc.trim()) return acc.trim(); // got something meaningful
+      if (acc.trim()) return acc.trim();
       // else try next model/version in cascade
     }
   }
   return "";
 }
-
 
 // ── Test route ───────────────────────────────────────────────────────────────
 app.get("/test-hf", async (req, res) => {

@@ -29,7 +29,14 @@ app.use((req, _res, next) => {
 });
 
 // No-cache for static to avoid stale CSS/JS
-const clientDir = path.resolve(__dirname, "public");
+const fs = await import("node:fs");
+const CLIENT_DIR = process.env.CLIENT_DIR || null;
+// Prefer $CLIENT_DIR, else ./public if it exists, else current dir
+const candidateA = CLIENT_DIR ? path.resolve(CLIENT_DIR) : null;
+const candidateB = path.resolve(__dirname, "public");
+const candidateC = path.resolve(__dirname);
+const pick = (p) => p && fs.existsSync(p) && fs.statSync(p).isDirectory();
+const clientDir = pick(candidateA) ? candidateA : (pick(candidateB) ? candidateB : candidateC);
 app.use((req, res, next) => {
   if (/\.(css|js|map)$/.test(req.url)) res.set("Cache-Control", "no-store");
   next();

@@ -7,7 +7,7 @@
  */
 
 //config
-const API_BASE = ""; 
+const API_BASE = "https://web-chat-api-1tx9.onrender.com"; 
 
 // Firebase Config
 const firebaseConfig = {

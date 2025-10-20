@@ -101,42 +101,77 @@ async function renderChatList(){
 async function renderChatDetail(id){
   $('app').innerHTML = tpl('tpl-chat-detail');
 
-  $('btn-logout').onclick = () => signOut(auth);
-  $('btn-new').onclick = async ()=>{
-    const headers = { 'Content-Type':'application/json', ...(await authHeader()) };
-    const r = await fetch(`${API_BASE}/api/sessions`, { method:'POST', headers, body: JSON.stringify({ title:'New chat' }) });
-    if (!r.ok) { if (r.status === 401 || r.status === 403) location.hash = '#/login'; return; }
-    const j = await r.json();
-    location.hash = `#/chat/${j.id}`;
-  };
+  // logout button on this page too
+  const btnLogout = $('btn-logout');
+  if (btnLogout) btnLogout.onclick = () => signOut(auth);
 
-  await populateSidebarSessions(id);
-  await loadMessages(id);
+  const listEl = $('messages');
 
-  const form = $('msg-form');
-  const input = $('msg');
-  const sendBtn = $('btn-send');
+  // helper to append a single bubble without re-rendering whole list
+  function appendBubble({ role, html, pendingId }){
+    const who = role === 'assistant' ? '🤖' : 'You';
+    const klass = role === 'assistant' ? 'assistant' : 'you';
+    const idAttr = pendingId ? ` data-id="${pendingId}"` : '';
+    const div = document.createElement('div');
+    div.className = `msg ${klass}`;
+    div.innerHTML = `
+      <span class="who">${who}</span>
+      <div class="msg-body"${idAttr}>${html}</div>
+    `;
+    listEl.appendChild(div);
+    listEl.scrollTop = listEl.scrollHeight;
+    return div;
+  }
 
-  form.onsubmit = async (e)=>{
+  await loadMessages(id); // initial history
+
+  $('msg-form').onsubmit = async (e)=>{
     e.preventDefault();
+    const input = $('msg');
     const content = (input.value || '').trim();
     if(!content) return;
-
     input.value = '';
-    input.disabled = true; sendBtn.disabled = true;
 
-    const headers = { 'Content-Type':'application/json', ...(await authHeader()) };
-    const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, {
-      method:'POST', headers, body: JSON.stringify({ content })
+    // 1) Show the user's message immediately
+    appendBubble({ role:'user', html: mdToHtml(content) });
+
+    // 2) Add a typing bubble for the assistant
+    const pid = `p-${Date.now()}`;
+    appendBubble({
+      role:'assistant',
+      html:`<span class="typing"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span>`,
+      pendingId: pid
     });
 
-    input.disabled = false; sendBtn.disabled = false;
-    input.focus();
+    // 3) Send to server
+    try {
+      const headers = { 'Content-Type':'application/json', ...(await authHeader()) };
+      const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, {
+        method:'POST', headers, body: JSON.stringify({ content })
+      });
 
-    if (!r.ok) { if (r.status === 401 || r.status === 403) location.hash = '#/login'; return; }
-    await loadMessages(id, /*scroll*/true);
+      // 401/403 -> force reauth
+      if (r.status === 401 || r.status === 403) {
+        location.hash = '#/login';
+        return;
+      }
+      const j = await r.json();
+
+      // 4) Replace typing bubble with the real reply
+      const bubble = document.querySelector(`.msg.assistant .msg-body[data-id="${pid}"]`);
+      if (bubble) bubble.innerHTML = mdToHtml(j.reply || '…');
+
+      // 5) Optional: refresh from server so local view and DB are in sync
+      // (won’t flicker because we already showed both bubbles)
+      setTimeout(()=>loadMessages(id), 50);
+    } catch (e) {
+      const bubble = document.querySelector(`.msg.assistant .msg-body[data-id="${pid}"]`);
+      if (bubble) bubble.innerHTML = mdToHtml("Sorry—network error while replying.");
+      console.error('Send message failed', e);
+    }
   };
 }
+
 
 async function populateSidebarSessions(activeId=null){
   const headers = await authHeader();

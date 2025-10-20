@@ -198,7 +198,7 @@ async function callGemini({ prompt, model, ver, systemText }) {
 
 
 async function generateTextFromGemini(prompt, systemText) {
-  const base = (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
+  const base = (process.env.GEMINI_MODEL || "gemini-2.5-pro").replace(/^models\//, "");
 
   // try 2.5
   {

@@ -7,22 +7,29 @@
   --border:rgba(255,255,255,0.08);
   --accent:#7c3aed;   /* purple */
   --accent-2:#9333ea; /* brighter purple */
+  --success:#22c55e;
+  --danger:#ef4444;
 }
 
+/* ---------- Base / reset ---------- */
 *{ box-sizing:border-box }
 html,body{ height:100% }
-html{ color-scheme: dark }
+html{ color-scheme: dark; }
 body{
-  margin:0; font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;
+  margin:0;
+  font-family: ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial;
+  color:var(--text);
   background:
     radial-gradient(1200px 800px at 10% -10%, rgba(124,58,237,0.14), transparent 60%),
     radial-gradient(900px 700px at 90% 0%,   rgba(147,51,234,0.12), transparent 60%),
     var(--bg);
-  color:var(--text);
 }
+a{ color:var(--accent); text-decoration:none }
+a:hover{ text-decoration:underline }
 
 /* Utilities */
 .muted{ color:var(--muted) }
+.hidden{ display:none !important }
 .glass{
   background: linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.02));
   border:1px solid var(--border);
@@ -30,11 +37,11 @@ body{
   border-radius:14px;
 }
 
-/* App layout */
+/* ---------- App layout ---------- */
 .app{ min-height:100dvh }
-.layout{ display:flex; min-height:100dvh }
+.layout{ display:flex; min-height:100dvh; }
 
-/* Sidebar */
+/* ---------- Sidebar ---------- */
 .sidebar{
   width:320px; min-width:280px; max-width:360px;
   border-right:1px solid var(--border);
@@ -49,7 +56,9 @@ body{
 .logo span{ color:var(--accent) }
 .sidebar-actions{ padding:12px 14px; border-bottom:1px solid var(--border) }
 
-.session-list{ list-style:none; margin:0; padding:8px; overflow:auto; flex:1; }
+.session-list{
+  list-style:none; margin:0; padding:8px; overflow:auto; flex:1;
+}
 .session-list li a{
   display:block; padding:10px 12px; border-radius:10px; color:inherit; text-decoration:none;
   border:1px solid transparent;
@@ -59,7 +68,7 @@ body{
   border-color: rgba(124,58,237,0.20);
 }
 
-/* Main chat panel */
+/* ---------- Main chat panel ---------- */
 .chat{ flex:1; display:flex; flex-direction:column; min-width:0; }
 .chat-head{
   display:flex; align-items:center; gap:12px;
@@ -70,16 +79,18 @@ body{
 .link-back:hover{ color:var(--text) }
 .chat-title{ font-weight:700 }
 
-/* Messages */
+/* ---------- Messages list ---------- */
 .messages{
   flex:1; overflow:auto; padding:22px 22px 110px;
   display:flex; flex-direction:column; gap:12px;
   scroll-behavior:smooth;
 }
 
-/* Message bubble */
+/* ---------- Message bubbles ---------- */
 .msg{
-  max-width: 80ch; padding:12px 14px; border-radius:14px;
+  max-width: 80ch;
+  padding:12px 14px;
+  border-radius:14px;
   border:1px solid var(--border);
   background: var(--panel);
   line-height:1.48;
@@ -87,7 +98,7 @@ body{
 }
 .msg.you{
   margin-left:auto;
-  background: linear-gradient(180deg, rgba(124,58,237,0.22), rgba(124,58,237,0.12));
+  background: rgba(124,58,237,0.18);
   border-color: rgba(124,58,237,0.35);
 }
 .msg.assistant{
@@ -96,39 +107,79 @@ body{
 }
 .msg .who{ display:block; font-size:12px; color:var(--muted); margin-bottom:6px }
 
-/* ---- Markdown content inside a bubble ----
-   Force children to be transparent so the bubble color never “resets”.
+/* ---- Markdown inside a bubble ----
+   Keep children transparent so the bubble color never “restarts”.
 */
 .msg .md, .msg .md *{ background:transparent !important; }
-.msg .md p{ margin:0 0 .6rem 0; }
-.msg .md ul{ margin:.25rem 0 .75rem 1.25rem; }
+.msg .md p{ margin:0 0 .7rem 0; }
+.msg .md h1, .msg .md h2, .msg .md h3,
+.msg .md h4, .msg .md h5, .msg .md h6{
+  margin:.6rem 0 .4rem; line-height:1.25;
+}
+.msg .md ul{ margin:.25rem 0 .75rem 1.25rem; padding:0; }
+.msg .md ol{ margin:.25rem 0 .75rem 1.25rem; padding:0; }
 .msg .md li{ margin:.25rem 0 }
 .msg .md strong{ font-weight:700 }
+.msg .md em{ font-style:italic }
+
+/* Inline code & blocks */
 .msg .md code{
   background: rgba(255,255,255,.06);
-  padding: 1px 6px; border-radius: 6px;
+  padding: 1px 6px; border-radius: 6px; font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
 }
 .msg .md pre{
   background: rgba(255,255,255,.06);
   padding: 10px; border-radius: 10px; overflow:auto;
+  font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;
 }
 
-/* Typing bubble */
-.msg.typing{ display:inline-flex; align-items:center; gap:10px; padding:10px 12px; }
+/* Tables (optional markdown) */
+.msg .md table{
+  border-collapse: collapse;
+  border:1px solid var(--border);
+  width:100%;
+  margin:.5rem 0;
+}
+.msg .md th, .msg .md td{
+  border:1px solid var(--border);
+  padding:.4rem .6rem;
+}
+.msg .md th{ background: rgba(255,255,255,0.04); }
+
+/* Blockquote */
+.msg .md blockquote{
+  border-left:3px solid rgba(124,58,237,0.45);
+  padding:.2rem .8rem; margin:.4rem 0;
+  color: var(--muted);
+}
+
+/* Links inside bubbles */
+.msg .md a{ color: var(--accent-2); text-decoration:underline; }
+.msg .md a:hover{ opacity:.9 }
+
+/* Make sure long content doesn’t bleed rounded corners */
+.msg .md{ overflow:hidden; background-clip: padding-box; }
+
+/* ---------- Typing bubble ---------- */
+.msg.typing{
+  display:inline-flex; align-items:center; gap:10px; padding:10px 12px;
+}
 .dots{ display:inline-flex; gap:6px; }
 .dot{
   width:6px; height:6px; border-radius:50%;
   background:#c4b5fd; opacity:.3; animation: blink 1.2s infinite;
 }
-.dot:nth-child(2){ animation-delay:.15s } .dot:nth-child(3){ animation-delay:.30s }
+.dot:nth-child(2){ animation-delay:.15s }
+.dot:nth-child(3){ animation-delay:.30s }
 @keyframes blink{ 0%,80%,100%{opacity:.25} 40%{opacity:1} }
 
-/* Composer — keep it subtle so it doesn’t look like a “color reset” bar */
+/* ---------- Composer (sticky footer) ---------- */
 .composer{
   position:sticky; bottom:0; display:flex; gap:10px; padding:12px;
   background: var(--panel-2);
   border-top:1px solid var(--border);
   backdrop-filter: blur(6px);
+  z-index: 2;
 }
 .input{
   flex:1; height:46px; border-radius:12px; border:1px solid var(--border);
@@ -140,7 +191,7 @@ body{
   box-shadow: 0 0 0 3px rgba(124,58,237,0.15);
 }
 
-/* Buttons */
+/* ---------- Buttons ---------- */
 .btn{
   height:40px; border-radius:10px; border:1px solid var(--border);
   background: var(--panel-2); color:var(--text); padding:0 12px; cursor:pointer;
@@ -159,17 +210,28 @@ body{
 .btn-ghost{ background: transparent; border-color: var(--border); color: var(--muted); }
 .btn-ghost:hover{ color: var(--text) }
 
-/* Empty state / Login */
+/* ---------- Empty state / Login ---------- */
 .empty-state{ flex:1; display:flex; align-items:center; justify-content:center; padding:24px; }
 .empty-card{ width:min(720px, 92vw); padding:28px; text-align:center; }
 .login-wrap{ min-height:100dvh; display:flex; align-items:center; justify-content:center; padding:24px; }
 .login-card{ width:min(420px, 92vw); padding:28px; }
 .brand{ margin-bottom:16px }
 
-/* Scrollbars */
+/* ---------- Scrollbars ---------- */
 .messages::-webkit-scrollbar,
 .session-list::-webkit-scrollbar{ width:10px }
 .messages::-webkit-scrollbar-thumb,
 .session-list::-webkit-scrollbar-thumb{
   background: rgba(124,58,237,0.35); border-radius:8px;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 900px){
+  .sidebar{ width: 260px; min-width: 240px; }
+}
+@media (max-width: 720px){
+  .layout{ flex-direction:column; }
+  .sidebar{ width:100%; min-width:100%; border-right:none; border-bottom:1px solid var(--border); }
+  .messages{ padding:16px 14px 100px; }
+  .msg{ max-width: 100%; }
 }

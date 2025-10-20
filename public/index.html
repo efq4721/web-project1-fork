@@ -1,23 +1,83 @@
-<!doctype html><html><body>
-<main id="app"></main>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FGC Chat</title>
+  <link rel="stylesheet" href="./styles.css" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg width='256' height='256' viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop stop-color='%237c3aed'/%3E%3Cstop offset='1' stop-color='%239333ea'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect rx='48' width='256' height='256' fill='%2312121b'/%3E%3Cpath d='M64 176l32-64 32 32 64-64' stroke='url(%23g)' stroke-width='16' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='196' cy='80' r='8' fill='%23e7e7f1'/%3E%3C/svg%3E" />
+</head>
+<body>
+  <div id="app" class="app"></div>
 
-<script type="text/x-template" id="tpl-login">
-  <h1>Sign in</h1>
-  <button id="btn-google">Sign in with Google</button>
-</script>
+  <!-- LOGIN -->
+  <script type="text/x-template" id="tpl-login">
+    <div class="login-wrap">
+      <div class="login-card glass">
+        <div class="brand">
+          <div class="logo">FGC<span>Chat</span></div>
+          <p class="muted">Sign in to start chatting.</p>
+        </div>
+        <button id="btn-google" class="btn btn-primary">
+          <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M21.35 11.1h-9.17v2.98h5.52c-.24 1.5-1.67 4.4-5.52 4.4c-3.32 0-6.02-2.74-6.02-6.12s2.7-6.12 6.02-6.12c1.89 0 3.15.8 3.88 1.49l2.64-2.55C17.46 3.38 15.17 2.4 12.18 2.4C6.9 2.4 2.64 6.7 2.64 12s4.26 9.6 9.54 9.6c5.52 0 9.16-3.87 9.16-9.3c0-.62-.07-1.09-.19-1.6z"/></svg>
+          Sign in with Google
+        </button>
+      </div>
+    </div>
+  </script>
 
-<script type="text/x-template" id="tpl-chat">
-  <h1>Your Chats</h1>
-  <button id="btn-new">New Chat</button>
-  <button id="btn-logout">Log out</button>
-  <ul id="session-list"></ul>
-</script>
+  <!-- CHAT LIST -->
+  <script type="text/x-template" id="tpl-chat">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <div class="logo">FGC<span>Chat</span></div>
+          <button id="btn-logout" class="btn btn-ghost">Log out</button>
+        </div>
+        <div class="sidebar-actions">
+          <button id="btn-new" class="btn btn-accent">+ New Chat</button>
+        </div>
+        <ul id="session-list" class="session-list"></ul>
+      </aside>
+      <main class="empty-state">
+        <div class="empty-card glass">
+          <h1>Welcome 👋</h1>
+          <p class="muted">Create a chat on the left to get started.</p>
+        </div>
+      </main>
+    </div>
+  </script>
 
-<script type="text/x-template" id="tpl-chat-detail">
-  <a href="#/chat">← Back</a>
-  <div id="messages"></div>
-  <form id="msg-form"><input id="msg" placeholder="Say something…"><button>Send</button></form>
-</script>
+  <!-- CHAT DETAIL -->
+  <script type="text/x-template" id="tpl-chat-detail">
+    <div class="layout">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <a href="#/chat" class="logo">FGC<span>Chat</span></a>
+          <button id="btn-logout" class="btn btn-ghost">Log out</button>
+        </div>
+        <div class="sidebar-actions">
+          <button id="btn-new" class="btn btn-accent">+ New Chat</button>
+        </div>
+        <ul id="session-list" class="session-list"></ul>
+      </aside>
 
-<script type="module" src="./client.js"></script>
-</body></html>
+      <main class="chat">
+        <header class="chat-head">
+          <a href="#/chat" class="link-back">← All Chats</a>
+          <div class="chat-title" id="chat-title">Chat</div>
+        </header>
+
+        <section id="messages" class="messages"></section>
+
+        <form id="msg-form" class="composer">
+          <input id="msg" class="input" placeholder="Type your message…" autocomplete="off" />
+          <button class="btn btn-primary" id="btn-send">Send</button>
+        </form>
+      </main>
+    </div>
+  </script>
+
+  <script type="module" src="./client.js"></script>
+</body>
+</html>

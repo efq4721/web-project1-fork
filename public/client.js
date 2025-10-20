@@ -6,10 +6,10 @@
  * - Lightweight Markdown + JSON-to-HTML rendering
  */
 
-// ---------- CONFIG ----------
-const API_BASE = ""; // same-origin
+//config
+const API_BASE = ""; 
 
-// Your existing Firebase web config:
+// Firebase Config
 const firebaseConfig = {
   apiKey: "AIzaSyBfXlv6cnFWop3qLKXLPSAdR0L0MlPIH5Y",
   authDomain: "project1-e7dff.firebaseapp.com",
@@ -21,7 +21,7 @@ const firebaseConfig = {
   measurementId: "G-24ZM1BZGM5"
 };
 
-// ---------- FIREBASE (CDN) ----------
+//Firebase
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {
   getAuth, onAuthStateChanged, GoogleAuthProvider,
@@ -31,7 +31,7 @@ import {
 const appFB = initializeApp(firebaseConfig);
 const auth = getAuth(appFB);
 
-// ---------- DOM UTILS ----------
+//UTILS
 const $ = (id) => document.getElementById(id);
 const tpl = (id) => document.getElementById(id)?.innerHTML ?? "";
 
@@ -43,25 +43,25 @@ function escapeHtml(s) {
 const roleClass = (role) => (role === "assistant" ? "assistant" : "you");
 const whoText  = (role) => (role === "assistant" ? "🤖" : "You");
 
-// Basic Markdown → HTML (bold/italic, lists, code, paragraphs)
+//Basic Markdown → HTML (bold/italic, lists, code, paragraphs)
 function mdToHtml(text) {
   if (!text) return "";
   let t = String(text).replace(/\r\n/g, "\n");
 
-  // fenced code blocks ``` ```
+  //fenced code blocks ``` ```
   t = t.replace(/```([\s\S]*?)```/g, (_, code) =>
     `<pre><code>${escapeHtml(code)}</code></pre>`);
 
-  // inline code `code`
+  //inline code `code`
   t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${escapeHtml(code)}</code>`);
 
-  // bold **text**
+  //bold **text**
   t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
 
-  // italic *text*
+  //italic *text*
   t = t.replace(/\*([^*\n]+)\*/g, "<i>$1</i>");
 
-  // simple lists: lines starting with - or *
+  //simple lists: lines starting with - or *
   const lines = t.split("\n");
   let html = "";
   let inList = false;
@@ -80,7 +80,7 @@ function mdToHtml(text) {
   return html;
 }
 
-// If the model responds with a JSON object, format nicely; fallback to pretty JSON or markdown.
+//If the model responds with a JSON object, format nicely
 function jsonToHtml(jsonStr) {
   try {
     const obj = JSON.parse(jsonStr);
@@ -112,11 +112,11 @@ function jsonToHtml(jsonStr) {
     }
     return parts.join("\n");
   } catch {
-    return ""; // not valid JSON
+    return "";
   }
 }
 
-// Render one message bubble (no page re-render)
+//Render one message bubble
 function renderMessage(container, msg) {
   const wrap = document.createElement("div");
   wrap.className = `msg ${msg.role === "assistant" ? "assistant" : "you"}`;
@@ -127,14 +127,13 @@ function renderMessage(container, msg) {
   whoEl.textContent = (msg.role === "assistant" ? "🤖" : "You");
 
   const body = document.createElement("div");
-  body.className = "md"; // IMPORTANT: match styles.css
+  body.className = "md";
 
   const raw = (msg.content ?? "").toString();
-  // Prefer the global renderer you defined in index.html
+  //Prefer the global renderer defined in index.html
   if (typeof window.renderMarkdown === "function") {
     body.innerHTML = window.renderMarkdown(raw);
   } else {
-    // fallback: very light markdown
     const html = mdToHtml(raw);
     body.innerHTML = html || escapeHtml(raw);
   }
@@ -146,10 +145,10 @@ function renderMessage(container, msg) {
 }
 
 
-// Single typing bubble (uses .dots/.dot — matches your CSS)
+//Single typing bubble 
 function showTyping(container) {
   let el = container.querySelector("#typing-bubble");
-  if (el) return el; // already showing
+  if (el) return el; 
   el = document.createElement("div");
   el.id = "typing-bubble";
   el.className = "msg assistant typing";
@@ -167,7 +166,7 @@ function hideTyping(container) {
   if (el) el.remove();
 }
 
-// ---------- ROUTER ----------
+//Router
 window.addEventListener("hashchange", route);
 
 onAuthStateChanged(auth, () => route());
@@ -195,7 +194,7 @@ function route() {
   location.hash = "#/login";
 }
 
-// ---------- VIEWS ----------
+//Views
 async function renderLogin() {
   $("app").innerHTML = tpl("tpl-login");
 
@@ -226,7 +225,7 @@ async function renderChatList() {
     location.hash = `#/chat/${j.id}`;
   };
 
-  // load sessions
+  //load sessions
   const headers = await authHeader();
   const r = await fetch(`${API_BASE}/api/sessions`, { headers });
   if (!r.ok) {
@@ -249,7 +248,7 @@ async function renderChatList() {
     </li>`;
 }).join("");
 
-// Event delegation for rename/delete
+//Event delegation for rename/delete
 $("session-list").onclick = async (e) => {
   const btn = e.target.closest("button");
   if (!btn) return;
@@ -268,7 +267,7 @@ $("session-list").onclick = async (e) => {
         method: "PATCH", headers, body: JSON.stringify({ title: newTitle })
       });
       if (!r.ok) throw new Error(`Rename failed: ${r.status}`);
-      // Refresh list
+      //Refresh list
       const hdrs = await authHeader();
       const rr = await fetch(`${API_BASE}/api/sessions`, { headers: hdrs });
       const sessions2 = await rr.json();
@@ -297,7 +296,7 @@ $("session-list").onclick = async (e) => {
       const headers = await authHeader();
       const r = await fetch(`${API_BASE}/api/sessions/${sid}`, { method: "DELETE", headers });
       if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
-      // Remove the row locally
+      //Remove the row locally
       btn.closest("li")?.remove();
     } catch (err) {
       console.error(err);
@@ -309,7 +308,7 @@ $("session-list").onclick = async (e) => {
 }
 
 async function renderChatDetail(id) {
-  // Build the view (inline template)
+  //Build the view
   $("app").innerHTML = `
     <section class="chat">
       <div class="chat-head">
@@ -335,7 +334,7 @@ async function renderChatDetail(id) {
   const listEl = $("messages");
   let isWaiting = false;
 
-  // Load + paint messages for this session
+  //Load + paint messages for this session
   async function loadThread() {
     const headers = await authHeader();
     const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, { headers });
@@ -349,7 +348,7 @@ async function renderChatDetail(id) {
     listEl.innerHTML = "";
     for (const m of msgs) renderMessage(listEl, m);
 
-    // Title = first user line if present (will be overridden by manual rename)
+    //Title = first user line if present 
     const firstUser = msgs.find(m => m.role === "user" && (m.content || "").trim());
     if (firstUser && !$("chat-title").textContent) {
       $("chat-title").textContent = (firstUser.content || "").slice(0, 60);
@@ -359,10 +358,10 @@ async function renderChatDetail(id) {
     return msgs;
   }
 
-  // Initial load
+  //Initial load
   await loadThread();
 
-  // Rename in detail view
+  //Rename in detail view
   $("btn-rename-chat").onclick = async () => {
     const current = $("chat-title").textContent || "";
     const name = prompt("Rename chat:", current);
@@ -385,7 +384,7 @@ async function renderChatDetail(id) {
     }
   };
 
-  // Delete in detail view
+  //Delete in detail view
   $("btn-delete-chat").onclick = async () => {
     if (!confirm("Delete this chat? This cannot be undone.")) return;
     try {
@@ -399,7 +398,7 @@ async function renderChatDetail(id) {
     }
   };
 
-  // Submit handler: optimistic user bubble + typing + send + render POST reply (no polling)
+  //Submit handler
   $("msg-form").onsubmit = async (e) => {
     e.preventDefault();
     if (isWaiting) return;
@@ -409,12 +408,12 @@ async function renderChatDetail(id) {
     const content = (input.value || "").trim();
     if (!content) return;
 
-    // Optimistic user message
+    //Optimistic user message
     renderMessage(listEl, { role: "user", content });
     listEl.scrollTop = listEl.scrollHeight;
     input.value = "";
 
-    // Enter waiting state and show typing bubble
+    //Enter waiting state and show typing bubble
     isWaiting = true;
     if (sendBtn) sendBtn.disabled = true;
     input.disabled = true;
@@ -441,7 +440,7 @@ async function renderChatDetail(id) {
         return;
       }
 
-      // Render the assistant reply from the POST response (no GET-loop)
+      //Render the assistant reply
       const { reply } = await r.json();
       renderMessage(listEl, { role: "assistant", content: reply || "" });
 
@@ -451,7 +450,6 @@ async function renderChatDetail(id) {
       input.disabled = false;
       input.focus();
 
-      // Optional: one sync pass so DB matches UI
       await loadThread();
       listEl.scrollTop = listEl.scrollHeight;
     } catch (err) {
@@ -467,7 +465,7 @@ async function renderChatDetail(id) {
 }
 
 
-// ---------- AUTH HEADER ----------
+//Auth header
 async function authHeader() {
   const u = auth.currentUser;
   const t = u ? await u.getIdToken() : null;

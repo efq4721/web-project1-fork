@@ -25,7 +25,7 @@ body{
 color:var(--text);
 }
 
-/* layout */
+/*layout*/
 .app{ min-height:100dvh }
 .layout{ display:flex; min-height:100dvh }
 
@@ -72,24 +72,24 @@ color:var(--text);
 .link-back{ color:var(--muted); text-decoration:none } .link-back:hover{ color:var(--text) }
 .chat-title{ font-weight:700 }
 
-/* messages area */
+/*messages area*/
 .messages{
   flex:1; overflow:auto; padding:22px 22px 110px;
   display:flex; flex-direction:column; gap:12px;
   scroll-behavior:smooth;
 }
 
-/* SOLID bubbles */
+/*SOLID bubbles*/
 .msg{
   max-width: 80ch; padding:12px 14px; border-radius:14px;
   border:1px solid var(--border);
-  background-color:#13141a;  /* assistant base */
+  background-color:#13141a; 
   line-height:1.48;
   box-shadow: 0 4px 16px rgba(0,0,0,0.18);
 }
 .msg.you{
   margin-left:auto;
-  background-color:#171323;  /* user base */
+  background-color:#171323;  
   border-color: rgba(124,58,237,0.35);
 }
 .msg.assistant{
@@ -98,7 +98,7 @@ color:var(--text);
 }
 .msg .who{ display:block; font-size:12px; color:var(--muted); margin-bottom:6px }
 
-/* Content inside bubbles must be transparent */
+/* transparent bubbles */
 .msg .md, .msg .md *{
   background-color: transparent !important;
   background: transparent !important;
@@ -110,7 +110,7 @@ color:var(--text);
 .msg .md code{ background: rgba(255,255,255,.06); padding: 1px 6px; border-radius: 6px }
 .msg .md pre{ background: rgba(255,255,255,.06); padding: 10px; border-radius: 10px; overflow:auto }
 
-/* typing bubble */
+/*typing bubble*/
 .msg.typing{
   display:flex; align-items:center; gap:10px; padding:12px 14px;
   min-width:120px; background-color:#13141a; border:1px solid var(--border); border-radius:14px;
@@ -120,7 +120,7 @@ color:var(--text);
 .dot:nth-child(2){ animation-delay:.15s } .dot:nth-child(3){ animation-delay:.30s }
 @keyframes blink{ 0%,80%,100%{opacity:.25} 40%{opacity:1} }
 
-/* composer */
+/*composer*/
 .composer{
   position:sticky; bottom:0; display:flex; gap:10px; padding:12px;
   background: var(--panel-2);
@@ -136,14 +136,14 @@ color:var(--text);
 .btn-accent{ background: linear-gradient(90deg, rgba(124,58,237,0.35), rgba(147,51,234,0.25)); border-color: rgba(147,51,234,0.3); color:white; font-weight:600 }
 .btn-ghost{ background: transparent; border-color: var(--border); color: var(--muted) } .btn-ghost:hover{ color: var(--text) }
 
-/* misc */
+/*misc*/
 .empty-state{ flex:1; display:flex; align-items:center; justify-content:center; padding:24px }
 .empty-card{ width:min(720px, 92vw); padding:28px; text-align:center }
 .login-wrap{ min-height:100dvh; display:flex; align-items:center; justify-content:center; padding:24px }
 .login-card{ width:min(420px, 92vw); padding:28px }
 
 
-/* Ensure typing dots render visibly inside the bubble */
+/*Ensure typing dots render visibly inside the bubble*/
 .msg.typing .md{ display:inline-block }
 /* --- Full-viewport gradient stays; make sure it sits behind everything --- */
 html, body { height: 100%; }
@@ -162,8 +162,8 @@ body::before{
   min-height: 100dvh;
   display: grid !important;
   grid-template-columns: 1fr !important;
-  justify-items: center;   /* center horizontally */
-  align-content: center;   /* center vertically */
+  justify-items: center;  
+  align-content: center;   
   padding: 0;
   margin: 0;
 }
@@ -184,7 +184,6 @@ body::before{
   justify-self: center;    /* final horizontal centering guard */
 }
 
-/* Optional: if anything sets left margins/gutters, zero them on login */
 #app:has(#btn-google) [style*="margin-left"],
 #app:has(#btn-google) .gutter,
 #app:has(#btn-google) .left { margin-left: 0 !important; }

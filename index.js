@@ -1,10 +1,10 @@
-// server/index.js — Express 5 + Firebase RTDB + Gemini (stateless per turn)
+//server/index.js 
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import admin from "firebase-admin";
 
-// ── Firebase Admin ────────────────────────────────────────────────────────────
+//Firebase Admin
 const saJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
   ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
   : null;
@@ -17,7 +17,7 @@ admin.initializeApp(
 
 const db = admin.database();
 
-// ── App ───────────────────────────────────────────────────────────────────────
+//App 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 const PORT = Number(process.env.PORT || 9188);
@@ -28,10 +28,10 @@ app.use((req, _res, next) => {
   next();
 });
 
-// No-cache for static to avoid stale CSS/JS
+//No-cache for static to avoid stale CSS/JS
 const fs = await import("node:fs");
 const CLIENT_DIR = process.env.CLIENT_DIR || null;
-// Prefer $CLIENT_DIR, else ./public if it exists, else current dir
+//Prefer $CLIENT_DIR, else ./public if it exists, else current dir
 const candidateA = CLIENT_DIR ? path.resolve(CLIENT_DIR) : null;
 const candidateB = path.resolve(__dirname, "public");
 const candidateC = path.resolve(__dirname);
@@ -43,10 +43,10 @@ app.use((req, res, next) => {
 });
 app.use(express.static(clientDir, { etag: false, lastModified: false, cacheControl: false, maxAge: 0 }));
 
-// ── Health ───────────────────────────────────────────────────────────────────
+//Health 
 app.get("/ping", (_req, res) => res.json({ ok: true }));
 
-// ── Auth guard ───────────────────────────────────────────────────────────────
+//Auth guard 
 async function authGuard(req, res, next) {
   const h = req.headers.authorization || "";
   const token = h.startsWith("Bearer ") ? h.slice(7) : null;
@@ -61,7 +61,7 @@ async function authGuard(req, res, next) {
   }
 }
 
-// ── Sessions ─────────────────────────────────────────────────────────────────
+//Sessions
 app.get("/api/sessions", authGuard, async (req, res) => {
   res.set("Cache-Control", "no-store");
   const snap = await db.ref("sessions").orderByChild("ownerUid").equalTo(req.user.uid).once("value");
@@ -88,7 +88,7 @@ app.post("/api/sessions", authGuard, async (req, res) => {
   });
   res.json({ id: ref.key });
 });
-// Rename a session (update title)
+//Rename a session (update title)
 app.patch("/api/sessions/:id", authGuard, async (req, res) => {
   try {
     const uid = req.user.uid;
@@ -103,7 +103,7 @@ app.patch("/api/sessions/:id", authGuard, async (req, res) => {
 
     await sessRef.update({
       title: newTitle,
-      updatedAt: new Date().toISOString()  // keep ISO string; your sorter uses Date.parse
+      updatedAt: new Date().toISOString()  //keep ISO string; your sorter uses Date.parse
     });
 
     return res.json({ ok: true, title: newTitle });
@@ -113,7 +113,7 @@ app.patch("/api/sessions/:id", authGuard, async (req, res) => {
   }
 });
 
-// Delete a session (and its messages)
+//Delete a session (and its messages)
 app.delete("/api/sessions/:id", authGuard, async (req, res) => {
   try {
     const uid = req.user.uid;
@@ -123,9 +123,9 @@ app.delete("/api/sessions/:id", authGuard, async (req, res) => {
     const sess = (await sessRef.once("value")).val();
     if (!sess || sess.ownerUid !== uid) return res.sendStatus(403);
 
-    // remove messages for this session first (optional order)
+    //remove messages for this session first (optional order)
     await db.ref(`messagesBySession/${sid}`).remove();
-    // remove session metadata
+    //remove session metadata
     await sessRef.remove();
 
     return res.json({ ok: true });
@@ -136,7 +136,7 @@ app.delete("/api/sessions/:id", authGuard, async (req, res) => {
 });
 
 
-// ── Messages ─────────────────────────────────────────────────────────────────
+//Messages
 app.get("/api/sessions/:id/messages", authGuard, async (req, res) => {
   res.set("Cache-Control", "no-store");
 
@@ -167,12 +167,12 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
   const nowIso = new Date().toISOString();
   const nowMs  = Date.now();
 
-  // 1) save user msg
+  //save user msg
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "user", content, createdAt: nowIso, createdAtMs: nowMs
   });
 
-  // 2) stateless Gemini call (SYSTEM_INSTRUCTION only)
+  //stateless Gemini call (SYSTEM_INSTRUCTION only)
   const systemText =
     (sess?.systemPrompt && String(sess.systemPrompt).trim()) ||
     (process.env.SYSTEM_INSTRUCTION || "").trim() || "";
@@ -186,13 +186,13 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
     replyText = "Sorry — LLM is unavailable right now.";
   }
 
-  // 3) save assistant msg
+  //save assistant msg
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "assistant", content: String(replyText),
     createdAt: new Date().toISOString(), createdAtMs: Date.now()
   });
 
-  // 4) session metadata
+  //session metadata
   await sessRef.update({
     updatedAt: new Date().toISOString(),
     title: (sess.title && sess.title.trim()) ? sess.title : content.slice(0, 40)
@@ -201,7 +201,7 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
   res.json({ reply: replyText });
 });
 
-// ── Gemini (simple, no history reuse; at most one continuation) ──────────────
+//Gemini 
 async function callGeminiOnce({ prompt, systemText, model, ver }) {
   const KEY = process.env.GEMINI_API_KEY;
   if (!KEY) return { status: 500, json: { error: "GEMINI_API_KEY not set" } };
@@ -242,7 +242,7 @@ async function callGeminiOnce({ prompt, systemText, model, ver }) {
 async function generateTextFromGemini(userPrompt, systemText) {
   const model = (process.env.GEMINI_MODEL || "gemini-2.5-pro").replace(/^models\//, "");
   for (const ver of ["v1beta", "v1"]) {
-    // first pass
+    //first pass
     const a = await callGeminiOnce({ prompt: userPrompt, systemText, model, ver });
     const candA = a.json?.candidates?.[0];
     const chunkA = (candA?.content?.parts || []).map(p => p?.text || "").join("").trim();
@@ -250,7 +250,6 @@ async function generateTextFromGemini(userPrompt, systemText) {
     let acc = chunkA;
 
     if (finishA === "MAX_TOKENS") {
-      // one continuation only; prevents topic drift/restarts
       const b = await callGeminiOnce({ prompt: "Continue.", systemText, model, ver });
       const candB = b.json?.candidates?.[0];
       const chunkB = (candB?.content?.parts || []).map(p => p?.text || "").join("").trim();
@@ -262,7 +261,7 @@ async function generateTextFromGemini(userPrompt, systemText) {
   return "";
 }
 
-// ── SPA fallback & 404 ───────────────────────────────────────────────────────
+//SPA fallback & 404 
 app.use((req, res, next) => {
   if (
     req.method === "GET" &&

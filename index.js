@@ -89,19 +89,22 @@ app.post("/api/sessions", authGuard, async (req, res) => {
   res.json({ id: ref.key });
 });
 // Rename a session (update title)
-app.patch("/api/sessions/:id", requireAuth, async (req, res) => {
+app.patch("/api/sessions/:id", authGuard, async (req, res) => {
   try {
     const uid = req.user.uid;
     const sid = req.params.id;
-    const { title } = req.body || {};
-    const newTitle = String(title || "").trim();
+    const newTitle = String(req.body?.title || "").trim();
     if (!newTitle) return res.status(400).json({ error: "invalid_title" });
     if (newTitle.length > 80) return res.status(400).json({ error: "title_too_long" });
 
-    const db = admin.database();
-    const sessionRef = db.ref(`sessions/${uid}/${sid}`);
-    // Some schemas store metadata at the session root; update safely without clobbering messages
-    await sessionRef.update({ title: newTitle, updatedAt: Date.now() });
+    const sessRef = db.ref(`sessions/${sid}`);
+    const sess = (await sessRef.once("value")).val();
+    if (!sess || sess.ownerUid !== uid) return res.sendStatus(403);
+
+    await sessRef.update({
+      title: newTitle,
+      updatedAt: new Date().toISOString()  // keep ISO string; your sorter uses Date.parse
+    });
 
     return res.json({ ok: true, title: newTitle });
   } catch (err) {
@@ -111,18 +114,27 @@ app.patch("/api/sessions/:id", requireAuth, async (req, res) => {
 });
 
 // Delete a session (and its messages)
-app.delete("/api/sessions/:id", requireAuth, async (req, res) => {
+app.delete("/api/sessions/:id", authGuard, async (req, res) => {
   try {
     const uid = req.user.uid;
     const sid = req.params.id;
-    const db = admin.database();
-    await db.ref(`sessions/${uid}/${sid}`).remove();
+
+    const sessRef = db.ref(`sessions/${sid}`);
+    const sess = (await sessRef.once("value")).val();
+    if (!sess || sess.ownerUid !== uid) return res.sendStatus(403);
+
+    // remove messages for this session first (optional order)
+    await db.ref(`messagesBySession/${sid}`).remove();
+    // remove session metadata
+    await sessRef.remove();
+
     return res.json({ ok: true });
   } catch (err) {
     console.error("delete session error", err);
     return res.status(500).json({ error: "server_error" });
   }
 });
+
 
 // ── Messages ─────────────────────────────────────────────────────────────────
 app.get("/api/sessions/:id/messages", authGuard, async (req, res) => {

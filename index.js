@@ -171,25 +171,26 @@ function extractGeminiText(raw, ct) {
   }
 }
 
-async function callGeminiOnce({ prompt, model, ver, systemText }) {
+async function callGeminiJSON({ history, model, ver, systemText }) {
   const KEY = process.env.GEMINI_API_KEY;
-  if (!KEY) return { status: 500, body: JSON.stringify({ error: "GEMINI_API_KEY not set" }), ct: "application/json" };
+  if (!KEY) return { status: 500, json: { error: "GEMINI_API_KEY not set" }, ct: "application/json" };
 
   const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(KEY)}`;
 
   const body = {
     systemInstruction: systemText ? { parts: [{ text: systemText }] } : undefined,
-    contents: [{ role: "user", parts: [{ text: prompt }]}],
+    contents: history, // multi-turn history (user/model)
     generationConfig: {
-      // Large cap so responses can be long if your SYSTEM_INSTRUCTION asks for it
-      maxOutputTokens: 768,
+      // Bigger cap so it can actually finish long answers
+      maxOutputTokens: 2048,
       temperature: 0.7,
       topK: 64,
       topP: 0.95,
-      responseMimeType: "text/plain",
-      response_mime_type: "text/plain"
+      // Ask for JSON so we can read finishReason and loop
+      responseMimeType: "application/json",
+      response_mime_type: "application/json"
     },
-    // Loosen safety so benign FGC questions don't get blanked out
+    // Loosen safety so benign FGC content doesn't get blanked
     safetySettings: [
       { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_NONE" },
       { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_NONE" },
@@ -200,32 +201,52 @@ async function callGeminiOnce({ prompt, model, ver, systemText }) {
 
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const text = await r.text();
+  let json;
+  try { json = JSON.parse(text); } catch { json = { raw: text }; }
   const ct = r.headers.get("content-type") || "application/json";
-  if (DEBUG) console.log(`[LLM] ${model} ${ver} → ${r.status} ct=${ct} body0=${text.slice(0,200)}`);
-  return { status: r.status, body: text, ct };
+  return { status: r.status, json, ct };
 }
 
-async function generateTextFromGemini(prompt, systemText) {
-  const base = (process.env.GEMINI_MODEL || "gemini-2.5-pro").replace(/^models\//, "");
+
+async function generateTextFromGemini(originalPrompt, systemText) {
+  const base = (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
   const versions = ["v1beta", "v1"];
   const models = Array.from(new Set([
-    base,                     // env-selected (e.g., gemini-2.5-pro)
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-1.5-pro-001",
-    "gemini-1.5-flash-001"
+    base, "gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro-001", "gemini-1.5-flash-001"
   ]));
 
   for (const ver of versions) {
     for (const m of models) {
-      const out = await callGeminiOnce({ prompt, model: m, ver, systemText });
-      if (out.status === 404 || out.status === 403 || out.status === 401) continue;
-      const txt = extractGeminiText(out.body, out.ct);
-      if (txt) return txt;
+      // Start the conversation with just your user prompt
+      let history = [{ role: "user", parts: [{ text: originalPrompt }]}];
+      let acc = "";
+
+      for (let i = 0; i < 4; i++) { // up to 4 segments if the model keeps hitting MAX_TOKENS
+        const out = await callGeminiJSON({ history, model: m, ver, systemText });
+        if (out.status === 404 || out.status === 401 || out.status === 403) break; // try next model
+        const cand = out.json?.candidates?.[0];
+        const parts = cand?.content?.parts || [];
+        const chunk = parts.map(p => p?.text || "").join("");
+        const finish = cand?.finishReason || cand?.finish_reason || "";
+
+        if (chunk) {
+          acc += (acc ? "\n\n" : "") + chunk;
+          // Continue the conversation so the next call can pick up where it stopped
+          history.push({ role: "model", parts: [{ text: chunk }] });
+        }
+
+        if (finish !== "MAX_TOKENS") break; // done (STOP/SAFETY/etc.)
+        // Ask it to continue
+        history.push({ role: "user", parts: [{ text: "Continue." }] });
+      }
+
+      if (acc.trim()) return acc.trim(); // got something meaningful
+      // else try next model/version in cascade
     }
   }
   return "";
 }
+
 
 // ── Test route ───────────────────────────────────────────────────────────────
 app.get("/test-hf", async (req, res) => {

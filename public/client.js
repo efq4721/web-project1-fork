@@ -119,30 +119,32 @@ function jsonToHtml(jsonStr) {
 // Render one message bubble (no page re-render)
 function renderMessage(container, msg) {
   const wrap = document.createElement("div");
-  wrap.className = `msg ${roleClass(msg.role)}`;
+  wrap.className = `msg ${msg.role === "assistant" ? "assistant" : "you"}`;
   wrap.dataset.id = msg.id || "";
 
   const whoEl = document.createElement("div");
   whoEl.className = "who";
-  whoEl.textContent = whoText(msg.role);
+  whoEl.textContent = (msg.role === "assistant" ? "🤖" : "You");
 
   const body = document.createElement("div");
-  body.className = "msg-body";
+  body.className = "md"; // IMPORTANT: match styles.css
 
-  const raw = (msg.content ?? "").toString().trim();
-  let html = "";
-  if (raw.startsWith("{") || raw.startsWith("[")) {
-    html = jsonToHtml(raw) || mdToHtml(raw);
+  const raw = (msg.content ?? "").toString();
+  // Prefer the global renderer you defined in index.html
+  if (typeof window.renderMarkdown === "function") {
+    body.innerHTML = window.renderMarkdown(raw);
   } else {
-    html = mdToHtml(raw);
+    // fallback: very light markdown
+    const html = mdToHtml(raw);
+    body.innerHTML = html || escapeHtml(raw);
   }
 
-  body.innerHTML = html || escapeHtml(raw);
   wrap.appendChild(whoEl);
   wrap.appendChild(body);
   container.appendChild(wrap);
   container.scrollTop = container.scrollHeight;
 }
+
 
 // Single typing bubble (uses .dots/.dot — matches your CSS)
 function showTyping(container) {
@@ -261,97 +263,49 @@ async function renderChatDetail(id) {
   let isWaiting = false;
 
   // Load + paint messages for this session
-  async function loadThread() {
-    const headers = await authHeader();
-    const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, { headers });
-    if (!r.ok) {
-      console.error("Load messages failed", r.status);
-      if (r.status === 401 || r.status === 403) location.hash = "#/login";
-      return;
-    }
-    const msgs = await r.json();
+  // Load + paint messages for this session
+async function loadThread({ preserveTyping = false } = {}) {
+  const hadTyping = !!listEl.querySelector('#typing-bubble');
 
-    listEl.innerHTML = "";
-    for (const m of msgs) renderMessage(listEl, m);
+  const headers = await authHeader();
+  const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, { headers });
+  if (!r.ok) {
+    console.error("Load messages failed", r.status);
+    if (r.status === 401 || r.status === 403) location.hash = "#/login";
+    return [];
+  }
+  const msgs = await r.json();
 
-    // Title = first user line if present
-    const firstUser = msgs.find(m => m.role === "user" && (m.content || "").trim());
-    if (firstUser) $("chat-title").textContent = (firstUser.content || "").slice(0, 60);
+  listEl.innerHTML = "";
+  for (const m of msgs) renderMessage(listEl, m);
 
-    listEl.scrollTop = listEl.scrollHeight;
+  // If we’re still waiting and no assistant message yet, re-add the typing bubble
+  if (preserveTyping && hadTyping && !msgs.some(m => m.role === "assistant")) {
+    showTyping(listEl);
   }
 
-  // Initial load
-  await loadThread();
+  const firstUser = msgs.find(m => m.role === "user" && (m.content || "").trim());
+  if (firstUser) $("chat-title").textContent = (firstUser.content || "").slice(0, 60);
 
-  // Submit handler: optimistic user bubble + typing + send + poll until assistant reply
-  $("msg-form").onsubmit = async (e) => {
-    e.preventDefault();
-    if (isWaiting) return;
+  listEl.scrollTop = listEl.scrollHeight;
+  return msgs;
+}
 
-    const input = $("msg");
-    const sendBtn = $("send-btn");
-    const content = (input.value || "").trim();
-    if (!content) return;
+// In your submit handler (inside try, after a successful POST):
+let gotAssistant = false;
+for (let i = 0; i < 60; i++) {
+  const msgs = await loadThread({ preserveTyping: true });
+  if (msgs.length && msgs[msgs.length - 1].role === "assistant") { gotAssistant = true; break; }
+  await new Promise(res => setTimeout(res, 1000));
+}
+hideTyping(listEl);
+isWaiting = false;
+if (sendBtn) sendBtn.disabled = false;
+input.disabled = false;
+input.focus();
+if (!gotAssistant) await loadThread();
+listEl.scrollTop = listEl.scrollHeight;
 
-    // Optimistic user message
-    renderMessage(listEl, { role: "user", content });
-    listEl.scrollTop = listEl.scrollHeight;
-    input.value = "";
-
-    // Enter waiting state and show typing bubble
-    isWaiting = true;
-    if (sendBtn) sendBtn.disabled = true;
-    input.disabled = true;
-    showTyping(listEl);
-
-    try {
-      const headers = { "Content-Type": "application/json", ...(await authHeader()) };
-      const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, {
-        method: "POST", headers, body: JSON.stringify({ content })
-      });
-
-      if (!r.ok) {
-        hideTyping(listEl);
-        isWaiting = false;
-        if (sendBtn) sendBtn.disabled = false;
-        input.disabled = false;
-        input.focus();
-        console.error("Send message failed", r.status);
-        if (r.status === 401 || r.status === 403) location.hash = "#/login";
-        renderMessage(listEl, { role: "assistant", content: "Sorry—couldn't send that. Try again." });
-        listEl.scrollTop = listEl.scrollHeight;
-        return;
-      }
-
-      // Keep the typing bubble and poll for the assistant reply (up to ~60s)
-      let gotAssistant = false;
-      for (let i = 0; i < 60; i++) {
-        await loadThread();
-        const last = listEl.lastElementChild;
-        if (last && last.classList.contains("assistant")) { gotAssistant = true; break; }
-        await new Promise(res => setTimeout(res, 1000));
-      }
-
-      hideTyping(listEl);
-      isWaiting = false;
-      if (sendBtn) sendBtn.disabled = false;
-      input.disabled = false;
-      input.focus();
-
-      // Final safety refresh if we somehow missed it
-      if (!gotAssistant) await loadThread();
-      listEl.scrollTop = listEl.scrollHeight;
-    } catch (err) {
-      hideTyping(listEl);
-      isWaiting = false;
-      if (sendBtn) sendBtn.disabled = false;
-      input.disabled = false;
-      console.error("Send error:", err);
-      renderMessage(listEl, { role: "assistant", content: "Network hiccup—please try again." });
-      listEl.scrollTop = listEl.scrollHeight;
-    }
-  };
 }
 
 // ---------- AUTH HEADER ----------

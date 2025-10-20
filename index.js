@@ -187,8 +187,8 @@ async function callGeminiJSON({ history, model, ver, systemText }) {
       topK: 64,
       topP: 0.95,
       // Ask for JSON so we can read finishReason and loop
-      responseMimeType: "application/json",
-      response_mime_type: "application/json"
+      responseMimeType: "text/plain",
+      response_mime_type: "text/plain"
     },
     // Loosen safety so benign FGC content doesn't get blanked
     safetySettings: [

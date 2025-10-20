@@ -170,3 +170,15 @@ body{
 .session-list::-webkit-scrollbar-thumb{
   background: rgba(124,58,237,0.35); border-radius:8px;
 }
+.msg-body p{ margin: 0 0 8px }
+.msg-body ul{ margin: 6px 0 10px 22px }
+.msg-body li{ margin: 4px 0 }
+.msg-body code{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: rgba(255,255,255,0.06);
+  padding: 1px 5px; border-radius: 6px;
+}
+.msg-body pre{
+  background: rgba(255,255,255,0.06);
+  padding: 10px; border-radius: 10px; overflow:auto;
+}

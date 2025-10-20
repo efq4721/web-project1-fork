@@ -35,6 +35,10 @@ async function authHeader(){
 
 function escapeHtml(s){return (s||"").replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;' }[c]));}
 
+function mdToHtml(s){
+  try { return DOMPurify.sanitize(marked.parse(s || "")); }
+  catch { return (s || "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;', "'":'&#39;'}[c])); }
+}
 function scrollMessagesBottom(){
   const box = $('messages');
   if (box) box.scrollTop = box.scrollHeight;
@@ -164,9 +168,10 @@ async function loadMessages(id, scrollAfter=false){
     const klass = m.role === 'assistant' ? 'assistant' : 'you';
     return `<div class="msg ${klass}">
               <span class="who">${who}</span>
-              <div>${escapeHtml(m.content||'')}</div>
+              <div class="msg-body">${mdToHtml(m.content)}</div>
             </div>`;
   }).join('');
+
 
   scrollMessagesBottom();
   if (scrollAfter) setTimeout(scrollMessagesBottom, 50);

@@ -16,17 +16,16 @@ admin.initializeApp(
 );
 
 const db = admin.database();
+//App 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = Number(process.env.PORT || 9188);
 app.use(cors({
   origin: [
     "https://efq-websec.web.app",
     "https://efq-websec.firebaseapp.com	"
   ]
 }));
-//App 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const app = express();
-const PORT = Number(process.env.PORT || 9188);
-
 app.use(express.json());
 app.use((req, _res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);

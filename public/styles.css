@@ -18,7 +18,11 @@ body{
     radial-gradient(1200px 800px at 10% -10%, rgba(124,58,237,0.14), transparent 60%),
     radial-gradient(900px 700px at 90% 0%,   rgba(147,51,234,0.12), transparent 60%),
     var(--bg);
-  color:var(--text);
+  
+  background-repeat: no-repeat, no-repeat, no-repeat;
+  background-attachment: fixed, fixed, fixed;
+  background-size: 1200px 800px, 900px 700px, auto;
+color:var(--text);
 }
 
 /* layout */
@@ -114,3 +118,7 @@ body{
 .empty-card{ width:min(720px, 92vw); padding:28px; text-align:center }
 .login-wrap{ min-height:100dvh; display:flex; align-items:center; justify-content:center; padding:24px }
 .login-card{ width:min(420px, 92vw); padding:28px }
+
+
+/* Ensure typing dots render visibly inside the bubble */
+.msg.typing .md{ display:inline-block }

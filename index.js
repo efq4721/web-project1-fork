@@ -88,6 +88,41 @@ app.post("/api/sessions", authGuard, async (req, res) => {
   });
   res.json({ id: ref.key });
 });
+// Rename a session (update title)
+app.patch("/api/sessions/:id", requireAuth, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const sid = req.params.id;
+    const { title } = req.body || {};
+    const newTitle = String(title || "").trim();
+    if (!newTitle) return res.status(400).json({ error: "invalid_title" });
+    if (newTitle.length > 80) return res.status(400).json({ error: "title_too_long" });
+
+    const db = admin.database();
+    const sessionRef = db.ref(`sessions/${uid}/${sid}`);
+    // Some schemas store metadata at the session root; update safely without clobbering messages
+    await sessionRef.update({ title: newTitle, updatedAt: Date.now() });
+
+    return res.json({ ok: true, title: newTitle });
+  } catch (err) {
+    console.error("rename session error", err);
+    return res.status(500).json({ error: "server_error" });
+  }
+});
+
+// Delete a session (and its messages)
+app.delete("/api/sessions/:id", requireAuth, async (req, res) => {
+  try {
+    const uid = req.user.uid;
+    const sid = req.params.id;
+    const db = admin.database();
+    await db.ref(`sessions/${uid}/${sid}`).remove();
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("delete session error", err);
+    return res.status(500).json({ error: "server_error" });
+  }
+});
 
 // ── Messages ─────────────────────────────────────────────────────────────────
 app.get("/api/sessions/:id/messages", authGuard, async (req, res) => {

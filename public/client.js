@@ -236,9 +236,76 @@ async function renderChatList() {
   }
   const sessions = await r.json();
   $("session-list").innerHTML = sessions.map(s => {
-    const when = new Date(s.updatedAt || s.createdAt || Date.now()).toLocaleString();
-    return `<li><a href="#/chat/${s.id}">${escapeHtml(s.title || s.id)}</a> <small class="muted">${when}</small></li>`;
-  }).join("");
+  const when = new Date(s.updatedAt || s.createdAt || Date.now()).toLocaleString();
+  const title = s.title || "New chat";
+  return `
+    <li class="session-row" data-id="${s.id}">
+      <a class="title" href="#/chat/${s.id}">${escapeHtml(title)}</a>
+      <small class="muted">${when}</small>
+      <div class="row-actions">
+        <button class="icon-btn rename" title="Rename" data-id="${s.id}">Rename</button>
+        <button class="icon-btn danger delete" title="Delete" data-id="${s.id}">Delete</button>
+      </div>
+    </li>`;
+}).join("");
+
+// Event delegation for rename/delete
+$("session-list").onclick = async (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  const sid = btn.dataset.id;
+  if (!sid) return;
+
+  if (btn.classList.contains("rename")) {
+    const current = btn.closest("li")?.querySelector(".title")?.textContent?.trim() || "";
+    const name = prompt("Rename chat:", current);
+    if (name == null) return; // cancelled
+    const newTitle = name.trim();
+    if (!newTitle) return alert("Title cannot be empty.");
+    try {
+      const headers = { "Content-Type": "application/json", ...(await authHeader()) };
+      const r = await fetch(`${API_BASE}/api/sessions/${sid}`, {
+        method: "PATCH", headers, body: JSON.stringify({ title: newTitle })
+      });
+      if (!r.ok) throw new Error(`Rename failed: ${r.status}`);
+      // Refresh list
+      const hdrs = await authHeader();
+      const rr = await fetch(`${API_BASE}/api/sessions`, { headers: hdrs });
+      const sessions2 = await rr.json();
+      $("session-list").innerHTML = sessions2.map(s => {
+        const when = new Date(s.updatedAt || s.createdAt || Date.now()).toLocaleString();
+        const title = s.title || "New chat";
+        return `
+          <li class="session-row" data-id="${s.id}">
+            <a class="title" href="#/chat/${s.id}">${escapeHtml(title)}</a>
+            <small class="muted">${when}</small>
+            <div class="row-actions">
+              <button class="icon-btn rename" title="Rename" data-id="${s.id}">Rename</button>
+              <button class="icon-btn danger delete" title="Delete" data-id="${s.id}">Delete</button>
+            </div>
+          </li>`;
+      }).join("");
+    } catch (err) {
+      console.error(err);
+      alert("Could not rename chat.");
+    }
+  }
+
+  if (btn.classList.contains("delete")) {
+    if (!confirm("Delete this chat? This cannot be undone.")) return;
+    try {
+      const headers = await authHeader();
+      const r = await fetch(`${API_BASE}/api/sessions/${sid}`, { method: "DELETE", headers });
+      if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+      // Remove the row locally
+      btn.closest("li")?.remove();
+    } catch (err) {
+      console.error(err);
+      alert("Could not delete chat.");
+    }
+  }
+};
+
 }
 
 async function renderChatDetail(id) {
@@ -247,7 +314,13 @@ async function renderChatDetail(id) {
     <section class="chat">
       <div class="chat-head">
         <a class="link-back" href="#/chat">← All Chats</a>
-        <div class="chat-title" id="chat-title"></div>
+        <div class="chat-title-wrap">
+          <div class="chat-title" id="chat-title"></div>
+          <div class="row-actions head-actions">
+            <button class="icon-btn rename-chat" id="btn-rename-chat" title="Rename">Rename</button>
+            <button class="icon-btn danger delete-chat" id="btn-delete-chat" title="Delete">Delete</button>
+          </div>
+        </div>
       </div>
 
       <div class="messages" id="messages"></div>

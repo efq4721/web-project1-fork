@@ -290,6 +290,10 @@ async function renderChatDetail(id){
   // Small helpers for this view
   const listEl = $('messages');
 
+  // Track a single typing bubble + prevent duplicate sends while waiting
+  let isWaiting = false;
+  let typingIdGlobal = null;
+
   const md = (txt) => {
     // Prefer global markdown renderer if you added one; otherwise simple escape+br
     if (typeof window.renderMarkdown === 'function') return window.renderMarkdown(txt || '');
@@ -307,6 +311,9 @@ async function renderChatDetail(id){
   };
 
   const showTyping = () => {
+    // Do not create multiple bubbles
+    const existing = document.getElementById('typing-bubble');
+    if (existing) return existing.id;
     const el = document.createElement('div');
     el.id = 'typing-bubble';
     el.className = 'msg assistant typing';
@@ -321,6 +328,7 @@ async function renderChatDetail(id){
   const hideTyping = (id) => {
     const el = document.getElementById(id);
     if (el && el.parentNode) el.parentNode.removeChild(el);
+    if (id === 'typing-bubble') typingIdGlobal = null;
   };
 
   const scrollToBottom = () => {
@@ -353,46 +361,56 @@ async function renderChatDetail(id){
   // Submit handler: optimistic user bubble + typing + send + refresh
   $('msg-form').onsubmit = async (e)=>{
     e.preventDefault();
+    if (isWaiting) return; // prevent double sends while waiting
     const input = $('msg');
+    const sendBtn = $('send-btn') || $('btn-send');
     const content = (input.value || '').trim();
     if (!content) return;
 
     // Optimistic user message
     renderOne({ role:'user', content });
-    scrollToBottom();
+    listEl.scrollTop = listEl.scrollHeight;
     input.value = '';
 
-    // Typing …
+    // Enter waiting state and show typing bubble
+    isWaiting = true;
+    if (sendBtn) sendBtn.disabled = true;
+    input.disabled = true;
     const typingId = showTyping();
-    scrollToBottom();
+    listEl.scrollTop = listEl.scrollHeight;
 
     // Send to server
     try {
       const headers = { 'Content-Type':'application/json', ...(await authHeader()) };
       const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, {
-        method:'POST',
-        headers,
-        body: JSON.stringify({ content })
+        method:'POST', headers, body: JSON.stringify({ content })
       });
 
       hideTyping(typingId);
+      isWaiting = false;
+      if (sendBtn) sendBtn.disabled = false;
+      input.disabled = false;
+      input.focus();
 
       if (!r.ok) {
         console.error('Send message failed', r.status);
         if (r.status === 401 || r.status === 403) location.hash = '#/login';
-        // Show an inline error bubble so the user sees something
         renderOne({ role:'assistant', content: "Sorry—couldn't send that. Try again." });
-        scrollToBottom();
+        listEl.scrollTop = listEl.scrollHeight;
         return;
       }
 
       // Reload full thread so we render the assistant reply from DB
       await loadThread();
+      listEl.scrollTop = listEl.scrollHeight;
     } catch (err) {
       hideTyping(typingId);
+      isWaiting = false;
+      if (sendBtn) sendBtn.disabled = false;
+      input.disabled = false;
       console.error('Send error:', err);
       renderOne({ role:'assistant', content: "Network hiccup—please try again." });
-      scrollToBottom();
+      listEl.scrollTop = listEl.scrollHeight;
     }
   };
 }

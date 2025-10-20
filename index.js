@@ -119,21 +119,21 @@ POST("/api/sessions/:id/messages", authGuard, async (req, res) => {
   const msgsRef = db.ref(`messagesBySession/${req.params.id}`);
   const nowIso = new Date().toISOString();
   const nowMs  = Date.now();
-
+  
   // 1) user message
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "user", content, createdAt: nowIso, createdAtMs: nowMs
   });
 
   // 2) Gemini reply (default 2.5; fallback only if 2.5 yields no visible text)
-  let replyText = "";
-  try {
-    replyText = await generateTextFromGemini(content);
-    if (!replyText) replyText = "Sorry—no text came back from the model.";
-  } catch (e) {
-    console.error("Gemini call failed:", e);
-    replyText = "Sorry—LLM is unavailable right now.";
-  }
+  // choose a systemText: session-specific > env > default
+const systemText =
+  (sess.systemPrompt && String(sess.systemPrompt)) ||
+  process.env.SYSTEM_INSTRUCTION ||
+  null;
+
+const replyText = await generateTextFromGemini(content, systemText);
+
 
   // 3) assistant message (TEXT ONLY)
   await msgsRef.push().set({
@@ -171,77 +171,60 @@ function extractGeminiText(raw) {
   }
 }
 
-async function callGemini({ prompt, model, ver }) {
+// replace your callGemini with this
+async function callGemini({ prompt, model, ver, systemText }) {
   const KEY = process.env.GEMINI_API_KEY;
-  if (!KEY) {
-    return { status: 500, body: JSON.stringify({ error: "GEMINI_API_KEY not set" }), ct: "application/json" };
-  }
+  if (!KEY) return { status: 500, body: JSON.stringify({ error: "GEMINI_API_KEY not set" }), ct: "application/json" };
 
   const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(KEY)}`;
 
-  // Force plain, short text; add a system nudge; relax safety so benign Qs don’t blank out
   const body = {
-    systemInstruction: {
-      parts: [{ text: "Answer in plain text only. Keep replies short and direct. Do NOT include hidden reasoning." }]
-    },
+    systemInstruction: systemText ? { parts: [{ text: systemText }] } : undefined,
     contents: [{ role: "user", parts: [{ text: prompt }]}],
     generationConfig: {
-      maxOutputTokens: 128,
-      temperature: 0.4,
-      topK: 64,
-      topP: 0.95,
+      maxOutputTokens: 160,
+      temperature: 0.5,
       responseMimeType: "text/plain",
       response_mime_type: "text/plain"
-    },
-    safetySettings: [
-      { category: "HARM_CATEGORY_HARASSMENT",         threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_HATE_SPEECH",        threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT",  threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_DANGEROUS_CONTENT",  threshold: "BLOCK_NONE" }
-    ]
+    }
   };
 
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
-  });
-
+  const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
   const text = await r.text();
   const ct = r.headers.get("content-type") || "application/json";
-  return { status: r.status, body: text, ct };
+  return { status:r.status, body:text, ct };
 }
 
 
-async function generateTextFromGemini(prompt) {
-  // Your preference: 2.5 first; only fall back when it returns no text
+
+async function generateTextFromGemini(prompt, systemText) {
   const base = (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
-  const attempts = [
-    { ver: "v1beta", model: base },                   // 2.5 is here
-    { ver: "v1beta", model: `${base}-001` },          // if an -001 exists regionally
-    { ver: "v1",     model: "gemini-1.5-flash-001" }, // visible text fallback
-    { ver: "v1",     model: "gemini-1.5-pro-001" }
-  ];
 
-  for (const a of attempts) {
-    const out = await callGemini({ prompt, ...a });
-
-    // Skip hard model-not-found; keep going
-    if (out.status === 404) continue;
-
-    // If we already got text/plain back, use it
-    if ((out.ct || "").includes("text/plain")) {
-      const t = (out.body || "").trim();
-      if (t) return t;
-      continue;
-    }
-
-    // Otherwise parse JSON
-    const t = extractGeminiText(out.body);
+  // try 2.5
+  {
+    const out = await callGemini({ prompt, ver:"v1beta", model:base, systemText });
+    const t   = out.ct.includes("text/plain") ? out.body.trim() : extractGeminiText(out.body);
     if (t) return t;
   }
+
+  // autocorrect pass (optional—keep if you already added it)
+  const fixed = await autocorrectPrompt(prompt);
+  if (fixed && fixed !== prompt) {
+    const out2 = await callGemini({ prompt: fixed, ver:"v1beta", model: base, systemText });
+    const t2   = out2.ct.includes("text/plain") ? out2.body.trim() : extractGeminiText(out2.body);
+    if (t2) return t2;
+  }
+
+  // fallbacks
+  for (const m of ["gemini-1.5-flash-001","gemini-1.5-pro-001"]) {
+    const out = await callGemini({ prompt, ver:"v1", model:m, systemText });
+    const t   = out.ct.includes("text/plain") ? out.body.trim() : extractGeminiText(out.body);
+    if (t) return t;
+  }
+
   return "";
 }
+
 
 
 // ── Test + routes debug ──────────────────────────────────────────────────────

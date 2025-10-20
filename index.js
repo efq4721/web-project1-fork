@@ -1,4 +1,4 @@
-// server/index.js — Express 5 + Firebase RTDB + Gemini (SYSTEM_INSTRUCTION only)
+// server/index.js — Express 5 + Firebase RTDB + Gemini + static frontend (ESM)
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,7 +61,7 @@ app.get("/api/sessions", authGuard, async (req, res) => {
     .sort((a, b) => {
       const ta = a.updatedAt ? Date.parse(a.updatedAt) : (a.createdAt ? Date.parse(a.createdAt) : 0);
       const tb = b.updatedAt ? Date.parse(b.updatedAt) : (b.createdAt ? Date.parse(b.createdAt) : 0);
-      return tb - ta; // newest first
+      return tb - ta;
     });
 
   res.json(list);
@@ -75,9 +75,8 @@ app.post("/api/sessions", authGuard, async (req, res) => {
     ownerUid: req.user.uid,
     title: req.body?.title || "New chat",
     createdAt: now,
-    updatedAt: now,
-    // per-session prompt later if you want:
-    // systemPrompt: req.body?.systemPrompt || null
+    updatedAt: now
+    // Future: per-session systemPrompt? (optional)
   });
   res.json({ id: ref.key });
 });
@@ -90,11 +89,9 @@ app.get("/api/sessions/:id/messages", authGuard, async (req, res) => {
   if (!sess || sess.ownerUid !== req.user.uid) return res.sendStatus(403);
 
   const snap = await db.ref(`messagesBySession/${req.params.id}`).once("value");
-
   const out = [];
   snap.forEach(c => { out.push({ id: c.key, ...c.val() }); });
 
-  // chronological
   out.sort((a, b) => {
     const ta = (a.createdAtMs != null) ? a.createdAtMs : (a.createdAt ? Date.parse(a.createdAt) : 0);
     const tb = (b.createdAtMs != null) ? b.createdAtMs : (b.createdAt ? Date.parse(b.createdAt) : 0);
@@ -117,12 +114,12 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
   const nowIso = new Date().toISOString();
   const nowMs  = Date.now();
 
-  // 1) store user message
+  // 1) store YOUR message
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "user", content, createdAt: nowIso, createdAtMs: nowMs
   });
 
-  // 2) build reply using ONLY SYSTEM_INSTRUCTION from env (or per-session if you later add it)
+  // 2) build history + call Gemini (SYSTEM_INSTRUCTION is the only knob)
   const systemText =
     (sess?.systemPrompt && String(sess.systemPrompt).trim()) ||
     (process.env.SYSTEM_INSTRUCTION || "").trim() ||
@@ -130,14 +127,15 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
 
   let replyText = "";
   try {
-    replyText = await generateTextFromGemini(content, systemText);
+    const history = await rtdbToGeminiHistory(db, req.params.id, content);
+    replyText = await generateWithHistory(history, systemText);
     if (!replyText) replyText = "Sorry — no text came back from the model.";
   } catch (e) {
     console.error("Gemini call failed:", e);
     replyText = "Sorry — LLM is unavailable right now.";
   }
 
-  // 3) store assistant message
+  // 3) store ASSISTANT message
   await msgsRef.push().set({
     ownerUid: req.user.uid, role: "assistant", content: String(replyText),
     createdAt: new Date().toISOString(), createdAtMs: Date.now()
@@ -152,91 +150,113 @@ app.post("/api/sessions/:id/messages", authGuard, async (req, res) => {
   res.json({ reply: replyText });
 });
 
-// ── Gemini helpers (2.5-first, “continue” loop, plain text) ───────────────────
-function extractGeminiText(raw, ct) {
-  if (ct && ct.includes("text/plain")) return (raw || "").toString().trim();
-  if (typeof raw === "string" && raw.length && raw[0] !== "{" && raw[0] !== "[") {
-    return raw.trim();
+// ── Gemini helpers (history + continuation) ───────────────────────────────────
+async function rtdbToGeminiHistory(db, sessionId, newUserText) {
+  const snap = await db.ref(`messagesBySession/${sessionId}`)
+    .orderByChild("createdAtMs")
+    .limitToLast(12)
+    .once("value");
+
+  const msgs = [];
+  snap.forEach(c => msgs.push({ id: c.key, ...c.val() }));
+  msgs.sort((a,b)=>{
+    const ta = (a.createdAtMs ?? (a.createdAt ? Date.parse(a.createdAt) : 0)) || 0;
+    const tb = (b.createdAtMs ?? (b.createdAt ? Date.parse(b.createdAt) : 0)) || 0;
+    return ta - tb;
+  });
+
+  const history = [];
+  for (const m of msgs) {
+    const text = (m.content ?? "").toString();
+    if (!text) continue;
+    const role = m.role === "assistant" ? "model" : "user";
+    history.push({ role, parts: [{ text }] });
   }
-  try {
-    const j = JSON.parse(raw);
-    const parts = j?.candidates?.[0]?.content?.parts;
-    if (Array.isArray(parts)) {
-      let txt = "";
-      for (const p of parts) if (p && typeof p.text === "string") txt += p.text;
-      txt = txt.trim();
-      if (txt) return txt;
-    }
-    if (typeof j?.output_text === "string" && j.output_text.trim()) return j.output_text.trim();
-    return "";
-  } catch {
-    return (raw || "").toString().trim();
+  if (newUserText && newUserText.trim()) {
+    history.push({ role: "user", parts: [{ text: newUserText }] });
   }
+  return history;
 }
 
-async function callGeminiOnce({ prompt, model, ver, systemText }) {
+async function generateWithHistory(history, systemText) {
   const KEY = process.env.GEMINI_API_KEY;
-  if (!KEY) return { status: 500, body: JSON.stringify({ error: "GEMINI_API_KEY not set" }), ct: "application/json" };
+  if (!KEY) return "";
 
-  const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(KEY)}`;
-
-  const body = {
-    systemInstruction: systemText ? { parts: [{ text: systemText }] } : undefined,
-    contents: [{ role: "user", parts: [{ text: prompt }]}],
-    generationConfig: {
-      maxOutputTokens: 2048,
-      temperature: 0.7,
-      topK: 64,
-      topP: 0.95,
-      responseMimeType: "text/plain",
-      response_mime_type: "text/plain"
-    },
-    safetySettings: [
-      { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-      { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
-    ]
-  };
-
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  const text = await r.text();
-  const ct = r.headers.get("content-type") || "application/json";
-
-  // try to read finishReason if JSON
-  let finish = "";
-  try {
-    const j = JSON.parse(text);
-    finish = j?.candidates?.[0]?.finishReason || j?.candidates?.[0]?.finish_reason || "";
-  } catch {}
-
-  return { status: r.status, body: text, ct, finish };
-}
-
-async function generateTextFromGemini(originalPrompt, systemText) {
-  const base = (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//, "");
   const versions = ["v1beta", "v1"];
-  const models = Array.from(new Set([
-    base, "gemini-2.5-pro", "gemini-2.5-flash", "gemini-1.5-pro-001", "gemini-1.5-flash-001"
+  const models   = Array.from(new Set([
+    (process.env.GEMINI_MODEL || "gemini-2.5-flash").replace(/^models\//,""),
+    "gemini-2.5-pro",
+    "gemini-2.5-flash",
+    "gemini-1.5-pro-001",
+    "gemini-1.5-flash-001",
   ]));
 
+  const post = async (ver, model, hist) => {
+    const url = `https://generativelanguage.googleapis.com/${ver}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(KEY)}`;
+    const body = {
+      systemInstruction: systemText ? { parts: [{ text: systemText }] } : undefined,
+      contents: hist,
+      generationConfig: {
+        maxOutputTokens: 2048,
+        temperature: 0.7,
+        topK: 64,
+        topP: 0.95,
+        responseMimeType: "text/plain",
+        response_mime_type: "text/plain"
+      },
+      safetySettings: [
+        { category: "HARM_CATEGORY_HARASSMENT",        threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_HATE_SPEECH",       threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+        { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" }
+      ]
+    };
+    const r = await fetch(url, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(body) });
+    const ct = r.headers.get("content-type") || "";
+    const txt = await r.text();
+    return { status:r.status, ct, txt };
+  };
+
   for (const ver of versions) {
-    for (const m of models) {
-      let prompt = originalPrompt;
+    for (const model of models) {
       let acc = "";
+      let hist = history.slice();
 
-      // up to 4 continuations if model stops on MAX_TOKENS
-      for (let i = 0; i < 4; i++) {
-        const out = await callGeminiOnce({ prompt, model: m, ver, systemText });
-        if (out.status === 404 || out.status === 401 || out.status === 403) break; // try next model
-        const chunk = extractGeminiText(out.body, out.ct);
-        if (chunk) acc += (acc ? "\n\n" : "") + chunk;
-        if (out.finish !== "MAX_TOKENS") break;
-        prompt = "Continue.";
+      for (let i=0; i<4; i++) {
+        const { status, ct, txt } = await post(ver, model, hist);
+        if (status === 404 || status === 401 || status === 403) break;
+
+        if (ct.includes("text/plain")) {
+          const chunk = (txt || "").trim();
+          if (chunk) acc += (acc ? "\n\n" : "") + chunk;
+          return acc.trim();
+        } else {
+          try {
+            const j = JSON.parse(txt);
+            const cand  = j?.candidates?.[0] || {};
+            const parts = cand?.content?.parts || [];
+            const chunk = parts.map(p=>p?.text||"").join("").trim();
+            const finish = cand?.finishReason || cand?.finish_reason || "";
+
+            if (chunk) {
+              acc += (acc ? "\n\n" : "") + chunk;
+              if (finish !== "MAX_TOKENS") return acc.trim();
+
+              // continue if truncated
+              hist.push({ role:"model", parts:[{ text: chunk }] });
+              hist.push({ role:"user",  parts:[{ text: "Continue." }] });
+              continue;
+            } else {
+              // no chunk; bail to next model
+              break;
+            }
+          } catch {
+            // Weird payload; return whatever we have
+            return (acc || txt).trim();
+          }
+        }
       }
-
       if (acc.trim()) return acc.trim();
-      // else try next model/version in cascade
     }
   }
   return "";
@@ -245,7 +265,8 @@ async function generateTextFromGemini(originalPrompt, systemText) {
 // ── Test route ───────────────────────────────────────────────────────────────
 app.get("/test-hf", async (req, res) => {
   const systemText = (process.env.SYSTEM_INSTRUCTION || "").trim();
-  const text = await generateTextFromGemini(req.query.prompt || "Say hello from Gemini!", systemText);
+  const history = [{ role:"user", parts:[{ text: req.query.prompt || "Say hello from Gemini!" }]}];
+  const text = await generateWithHistory(history, systemText);
   if (!text) return res.status(502).json({ error: "No text from Gemini" });
   res.type("text/plain").send(text);
 });

@@ -18,8 +18,8 @@ admin.initializeApp(
 const db = admin.database();
 app.use(cors({
   origin: [
-    "https://<your-app>.web.app",
-    "https://<your-app>.firebaseapp.com"
+    "https://efq-websec.web.app",
+    "https://efq-websec.firebaseapp.com	"
   ]
 }));
 //App 

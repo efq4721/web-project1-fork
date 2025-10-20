@@ -1,9 +1,15 @@
-// public/client.js — Firebase auth, router, chat UI (optimistic + typing bubble)
+/* public/client.js
+ * Minimal SPA chat UI (login → chat list → chat detail)
+ * - Shows your message immediately
+ * - Typing indicator while waiting
+ * - Incremental append (no full re-render flicker)
+ * - Lightweight Markdown + JSON-to-HTML rendering
+ */
 
 // ---------- CONFIG ----------
-const API_BASE = ""; // same origin
+const API_BASE = ""; // same-origin
 
-// Your Firebase web config (keep yours here)
+// Your existing Firebase web config:
 const firebaseConfig = {
   apiKey: "AIzaSyBfXlv6cnFWop3qLKXLPSAdR0L0MlPIH5Y",
   authDomain: "project1-e7dff.firebaseapp.com",
@@ -12,7 +18,7 @@ const firebaseConfig = {
   storageBucket: "project1-e7dff.firebasestorage.app",
   messagingSenderId: "41147317681",
   appId: "1:41147317681:web:34210bd0233408056a5190",
-  measurementId: "G-24ZM1BZGM5",
+  measurementId: "G-24ZM1BZGM5"
 };
 
 // ---------- FIREBASE (CDN) ----------
@@ -22,266 +28,378 @@ import {
   signInWithPopup, signInWithRedirect, getRedirectResult, signOut
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+const appFB = initializeApp(firebaseConfig);
+const auth = getAuth(appFB);
 
-// ---------- UTILS ----------
-const $   = (id)=>document.getElementById(id);
-const el  = (html)=>{ const d=document.createElement("div"); d.innerHTML=html.trim(); return d.firstElementChild; };
-async function authHeader(){
-  const u = auth.currentUser;
-  const t = u ? await u.getIdToken() : null;
-  return t ? { Authorization: `Bearer ${t}` } : {};
+// ---------- DOM UTILS ----------
+const $ = (id) => document.getElementById(id);
+const tpl = (id) => document.getElementById(id).innerHTML;
+
+function escapeHtml(s) {
+  return (s ?? "").toString().replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
 }
 
-// VERY small markdown-to-HTML (bold, code, lists, paragraphs). Safe enough for our text.
-window.renderMarkdown = function renderMarkdown(src=""){
-  let s = String(src ?? "");
-  s = s.replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
-  // bold **x**
-  s = s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-  // inline code `x`
-  s = s.replace(/`([^`]+?)`/g, "<code>$1</code>");
-  // bullets (lines starting with "* " or "- ")
-  if (/^(?:\*|-)\s+/m.test(s)) {
-    s = s.split(/\n{2,}/).map(block=>{
-      if (/^(?:\*|-)\s+/m.test(block)) {
-        const items = block.split(/\n/).map(l=>l.replace(/^(?:\*|-)\s+/, "").trim()).filter(Boolean);
-        return `<ul>${items.map(li=>`<li>${li}</li>`).join("")}</ul>`;
-      }
-      return `<p>${block.replace(/\n/g,"<br>")}</p>`;
-    }).join("\n");
-  } else {
-    s = s.split(/\n{2,}/).map(p=>`<p>${p.replace(/\n/g,"<br>")}</p>`).join("\n");
+function autoScroll(container) {
+  container.scrollTo({ top: container.scrollHeight, behavior: "smooth" });
+}
+
+// Basic Markdown → HTML (bold/italic, lists, code, paragraphs)
+function mdToHtml(text) {
+  if (!text) return "";
+  let t = text.replace(/\r\n/g, "\n");
+
+  // fenced code blocks ``` ```
+  t = t.replace(/```([\s\S]*?)```/g, (_, code) =>
+    `<pre><code>${escapeHtml(code)}</code></pre>`);
+
+  // inline code `code`
+  t = t.replace(/`([^`]+)`/g, (_, code) => `<code>${escapeHtml(code)}</code>`);
+
+  // bold **text**
+  t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+
+  // italic *text*
+  t = t.replace(/\*([^*\n]+)\*/g, "<i>$1</i>");
+
+  // simple lists: lines starting with - or *
+  const lines = t.split("\n");
+  let html = "";
+  let inList = false;
+  for (const line of lines) {
+    const m = line.match(/^\s*[-*]\s+(.*)$/);
+    if (m) {
+      if (!inList) { html += "<ul>"; inList = true; }
+      html += `<li>${m[1]}</li>`;
+    } else {
+      if (inList) { html += "</ul>"; inList = false; }
+      if (line.trim() === "") html += "<br>";
+      else html += `<p>${line}</p>`;
+    }
   }
-  return s;
-};
+  if (inList) html += "</ul>";
+  return html;
+}
+
+// If the model responds with a JSON object (like your “tech” example),
+// format it nicely into HTML. Fallback to pretty JSON.
+function jsonToHtml(jsonStr) {
+  try {
+    const obj = JSON.parse(jsonStr);
+    const parts = [];
+
+    if (obj.title) parts.push(`<h3>${escapeHtml(obj.title)}</h3>`);
+    if (obj.explanation) parts.push(`<p>${escapeHtml(obj.explanation)}</p>`);
+
+    const pushList = (label, arr) => {
+      if (!Array.isArray(arr) || !arr.length) return;
+      if (label) parts.push(`<h4>${escapeHtml(label)}</h4>`);
+      parts.push("<ul>");
+      for (const it of arr) {
+        if (typeof it === "string") parts.push(`<li>${escapeHtml(it)}</li>`);
+        else if (it && typeof it === "object" && it.step) parts.push(`<li>${escapeHtml(it.step)}</li>`);
+        else parts.push(`<li>${escapeHtml(String(it))}</li>`);
+      }
+      parts.push("</ul>");
+    };
+
+    // Common keys we saw
+    if (obj.what_it_is) parts.push(`<p><b>What it is:</b> ${escapeHtml(obj.what_it_is)}</p>`);
+    pushList("Why it matters", obj.why_it_matters);
+    pushList("How it works", obj.how_it_works_generally);
+    pushList("Common types", obj.common_tech_types_by_game);
+    if (obj.training_tip) parts.push(`<p><b>Training tip:</b> ${escapeHtml(obj.training_tip)}</p>`);
+
+    // If nothing matched, fallback to pretty JSON
+    if (!parts.length) {
+      return `<pre><code>${escapeHtml(JSON.stringify(obj, null, 2))}</code></pre>`;
+    }
+    return parts.join("\n");
+  } catch {
+    return ""; // not valid JSON
+  }
+}
+
+// Render one message bubble (no page re-render)
+function renderMessage(container, msg) {
+  const who = msg.role === "assistant" ? "🤖" : "You";
+  const wrap = document.createElement("div");
+  wrap.className = `msg ${msg.role}`;
+  wrap.dataset.id = msg.id || "";
+
+  const whoEl = document.createElement("div");
+  whoEl.className = "who";
+  whoEl.textContent = who;
+
+  const body = document.createElement("div");
+  body.className = "msg-body";
+
+  let html = "";
+  const raw = (msg.content ?? "").toString();
+
+  // Try JSON first if it looks like JSON
+  if (raw.trim().startsWith("{") || raw.trim().startsWith("[")) {
+    html = jsonToHtml(raw) || mdToHtml(raw);
+  } else {
+    html = mdToHtml(raw);
+  }
+
+  body.innerHTML = html || escapeHtml(raw);
+  wrap.appendChild(whoEl);
+  wrap.appendChild(body);
+  container.appendChild(wrap);
+}
+
+// Typing indicator bubble
+function addTyping(container) {
+  const wrap = document.createElement("div");
+  wrap.className = "msg assistant typing-bubble";
+  wrap.innerHTML = `
+    <div class="who">🤖</div>
+    <div class="msg-body">
+      <span class="typing">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+      </span>
+    </div>`;
+  container.appendChild(wrap);
+  return wrap;
+}
+function removeTyping(container) {
+  const el = container.querySelector(".typing-bubble");
+  if (el) el.remove();
+}
 
 // ---------- ROUTER ----------
-window.addEventListener('hashchange', route);
-onAuthStateChanged(auth, (u) => { route(); });
-getRedirectResult(auth).catch(e => console.log('redirect sign-in error:', e));
+window.addEventListener("hashchange", route);
 
-function route(){
-  const [_, page, id] = (location.hash || '#/login').split('/');
+onAuthStateChanged(auth, () => route());
+getRedirectResult(auth).catch(e => console.log("redirect sign-in error:", e));
 
-  if (page === 'login') {
-    if (auth.currentUser) { location.hash = '#/chat'; return; }
+function route() {
+  const [_, page, id] = (location.hash || "#/login").split("/");
+
+  if (page === "login") {
+    if (auth.currentUser) {
+      location.hash = "#/chat";
+      return;
+    }
     return renderLogin();
   }
 
-  if (!auth.currentUser) { location.hash = '#/login'; return; }
+  if (!auth.currentUser) {
+    location.hash = "#/login";
+    return;
+  }
 
-  if (page === 'chat' && !id) return renderChatList();
-  if (page === 'chat' && id)  return renderChatDetail(id);
+  if (page === "chat" && !id) return renderChatList();
+  if (page === "chat" && id)  return renderChatDetail(id);
 
-  location.hash = '#/login';
+  location.hash = "#/login";
 }
 
 // ---------- VIEWS ----------
-function renderLogin(){
-  document.body.innerHTML = `
-    <main class="login-wrap">
-      <section class="glass login-card">
-        <div class="brand"><strong>FGC</strong><span style="color:#7c3aed">Chat</span></div>
-        <button id="btn-google" class="btn btn-primary" style="width:100%">Sign in with Google</button>
-      </section>
-    </main>
-  `;
-  $('btn-google').onclick = async () => {
+async function renderLogin() {
+  $("app").innerHTML = tpl("tpl-login");
+  $("btn-google").onclick = async () => {
     try {
       await signInWithPopup(auth, new GoogleAuthProvider());
     } catch (e) {
+      console.log("Popup blocked, falling back to redirect:", e);
       await signInWithRedirect(auth, new GoogleAuthProvider());
     }
   };
 }
 
-async function renderChatList(){
-  document.body.innerHTML = `
-    <main class="app">
-      <div class="layout">
-        <aside class="sidebar">
-          <div class="sidebar-head">
-            <div class="logo">FGC<span>Chat</span></div>
-            <button id="btn-logout" class="btn btn-ghost">Log out</button>
-          </div>
-          <div class="sidebar-actions">
-            <button id="btn-new" class="btn btn-accent">+ New Chat</button>
-          </div>
-          <ul id="session-list" class="session-list"></ul>
-        </aside>
-        <section class="chat">
-          <div class="messages" id="messages">
-            <div class="empty-state">
-              <div class="glass empty-card">
-                <h1>Welcome 👋</h1>
-                <p class="muted">Create a chat on the left to get started.</p>
-              </div>
-            </div>
-          </div>
-          <form class="composer" id="msg-form" style="display:none">
-            <input id="msg" class="input" placeholder="Type your message…" autocomplete="off" />
-            <button class="btn btn-primary" id="send-btn" type="submit">Send</button>
-          </form>
-        </section>
-      </div>
-    </main>
-  `;
+async function renderChatList() {
+  $("app").innerHTML = tpl("tpl-chat");
 
-  $('btn-logout').onclick = () => signOut(auth);
-  $('btn-new').onclick = async ()=>{
-    const headers = { 'Content-Type':'application/json', ...(await authHeader()) };
-    const r = await fetch(`${API_BASE}/api/sessions`, { method:'POST', headers, body: JSON.stringify({ title:'New chat' }) });
-    if (!r.ok) { if (r.status === 401 || r.status === 403) location.hash = '#/login'; return; }
+  $("btn-logout").onclick = () => signOut(auth);
+  $("btn-new").onclick = async () => {
+    const headers = { "Content-Type": "application/json", ...(await authHeader()) };
+    const r = await fetch(`${API_BASE}/api/sessions`, { method: "POST", headers, body: JSON.stringify({ title: "New chat" }) });
+    if (!r.ok) {
+      console.error("Create session failed", r.status);
+      if (r.status === 401 || r.status === 403) location.hash = "#/login";
+      return;
+    }
     const j = await r.json();
     location.hash = `#/chat/${j.id}`;
   };
 
+  // load sessions
   const headers = await authHeader();
   const r = await fetch(`${API_BASE}/api/sessions`, { headers });
-  if (!r.ok) { if (r.status === 401 || r.status === 403) location.hash = '#/login'; return; }
+  if (!r.ok) {
+    console.error("List sessions failed", r.status);
+    if (r.status === 401 || r.status === 403) location.hash = "#/login";
+    return;
+  }
   const sessions = await r.json();
+  $("session-list").innerHTML = sessions.map(s => {
+    const when = new Date(s.updatedAt || s.createdAt || Date.now()).toLocaleString();
+    return `<li><a href="#/chat/${s.id}">${escapeHtml(s.title || s.id)}</a> <small class="muted">${when}</small></li>`;
+  }).join("");
+}
+function renderOneMessage(container, m){
+  const div = document.createElement('div');
+  div.className = `msg ${m.role === 'assistant' ? 'assistant' : 'you'}`;
+  div.innerHTML = `
+    <div class="who">${m.role === 'assistant' ? '🤖' : 'You'}</div>
+    <div class="md">${(window.renderMarkdown ? renderMarkdown(m.content || '') : (m.content || '').replace(/</g,'&lt;'))}</div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
 
-  $('session-list').innerHTML =
-    sessions.map(s=>{
-      const when = new Date(s.updatedAt || s.createdAt || Date.now()).toLocaleString();
-      return `<li><a href="#/chat/${s.id}">${(s.title||'New chat')}</a><br><small class="muted">${when}</small></li>`;
-    }).join('');
+function showTyping(container, id){
+  const div = document.createElement('div');
+  div.id = id;
+  div.className = 'msg assistant typing';
+  div.innerHTML = `
+    <div class="who">🤖</div>
+    <div class="md"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
+
+function hideTyping(id){
+  const el = document.getElementById(id);
+  if (el && el.parentNode) el.parentNode.removeChild(el);
 }
 
 async function renderChatDetail(id){
-  document.body.innerHTML = `
-    <main class="app">
-      <div class="layout">
-        <aside class="sidebar">
-          <div class="sidebar-head">
-            <div class="logo">FGC<span>Chat</span></div>
-            <button id="btn-logout" class="btn btn-ghost">Log out</button>
-          </div>
-          <div class="sidebar-actions">
-            <a class="btn btn-accent" href="#/chat">← All Chats</a>
-          </div>
-          <ul id="session-list" class="session-list"></ul>
-        </aside>
-
-        <section class="chat">
-          <div class="chat-head">
-            <a class="link-back" href="#/chat">← All Chats</a>
-            <div class="chat-title" id="chat-title"></div>
-          </div>
-
-          <div class="messages" id="messages"></div>
-
-          <form class="composer" id="msg-form">
-            <input id="msg" class="input" placeholder="Type your message…" autocomplete="off" />
-            <button class="btn btn-primary" id="send-btn" type="submit">Send</button>
-          </form>
-        </section>
+  // Build the view
+  $('app').innerHTML = `
+    <section class="chat">
+      <div class="chat-head">
+        <a class="link-back" href="#/chat">← All Chats</a>
+        <div class="chat-title" id="chat-title"></div>
       </div>
-    </main>
+
+      <div class="messages" id="messages"></div>
+
+      <form class="composer" id="msg-form">
+        <input id="msg" class="input" placeholder="Type your message…" autocomplete="off" />
+        <button class="btn btn-primary" id="send-btn" type="submit">Send</button>
+      </form>
+    </section>
   `;
 
-  $('btn-logout').onclick = () => signOut(auth);
-
+  // Small helpers for this view
   const listEl = $('messages');
 
-  const md = (txt)=> window.renderMarkdown(txt || "");
+  const md = (txt) => {
+    // Prefer global markdown renderer if you added one; otherwise simple escape+br
+    if (typeof window.renderMarkdown === 'function') return window.renderMarkdown(txt || '');
+    return (txt || '').replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>");
+  };
 
   const renderOne = (m) => {
-    const node = el(`
-      <div class="msg ${m.role === 'assistant' ? 'assistant' : 'you'}">
-        <div class="who">${m.role === 'assistant' ? '🤖' : 'You'}</div>
-        <div class="md">${md(m.content || '')}</div>
-      </div>
-    `);
-    listEl.appendChild(node);
-    return node;
+    const wrap = document.createElement('div');
+    wrap.className = `msg ${m.role === 'assistant' ? 'assistant' : 'you'}`;
+    wrap.innerHTML = `
+      <div class="who">${m.role === 'assistant' ? '🤖' : 'You'}</div>
+      <div class="md">${md(m.content || '')}</div>
+    `;
+    listEl.appendChild(wrap);
   };
 
   const showTyping = () => {
-    const node = el(`
-      <div id="typing-bubble" class="msg assistant typing">
-        <div class="who">🤖</div>
-        <div class="md"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
-      </div>
-    `);
-    listEl.appendChild(node);
-    return node;
+    const el = document.createElement('div');
+    el.id = 'typing-bubble';
+    el.className = 'msg assistant typing';
+    el.innerHTML = `
+      <div class="who">🤖</div>
+      <div class="md"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+    `;
+    listEl.appendChild(el);
+    return el.id;
   };
 
-  const hideTyping = () => {
-    const t = $('typing-bubble');
-    if (t && t.parentNode) t.parentNode.removeChild(t);
+  const hideTyping = (id) => {
+    const el = document.getElementById(id);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
   };
 
-  const scrollToBottom = () => { listEl.scrollTop = listEl.scrollHeight; };
+  const scrollToBottom = () => {
+    listEl.scrollTop = listEl.scrollHeight;
+  };
 
+  // Load + paint messages for this session
   async function loadThread(){
     const headers = await authHeader();
     const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, { headers });
-    if (!r.ok) { if (r.status === 401 || r.status === 403) location.hash = '#/login'; return; }
+    if (!r.ok) {
+      console.error('Load messages failed', r.status);
+      if (r.status === 401 || r.status === 403) location.hash = '#/login';
+      return;
+    }
     const msgs = await r.json();
 
     listEl.innerHTML = '';
     for (const m of msgs) renderOne(m);
 
+    // Title = first user line if present
     const firstUser = msgs.find(m => m.role === 'user' && (m.content || '').trim());
-    if (firstUser) $('chat-title').textContent = (firstUser.content || '').slice(0, 80);
-
-    // Also populate sidebar quickly
-    try {
-      const rs = await fetch(`${API_BASE}/api/sessions`, { headers });
-      if (rs.ok) {
-        const ss = await rs.json();
-        $('session-list').innerHTML =
-          ss.map(s=>{
-            const when = new Date(s.updatedAt || s.createdAt || Date.now()).toLocaleString();
-            return `<li><a href="#/chat/${s.id}">${(s.title||'New chat')}</a><br><small class="muted">${when}</small></li>`;
-          }).join('');
-      }
-    } catch {}
+    if (firstUser) $('chat-title').textContent = (firstUser.content || '').slice(0, 60);
     scrollToBottom();
   }
 
+  // Initial load
   await loadThread();
 
+  // Submit handler: optimistic user bubble + typing + send + refresh
   $('msg-form').onsubmit = async (e)=>{
     e.preventDefault();
     const input = $('msg');
     const content = (input.value || '').trim();
     if (!content) return;
 
-    // My message immediately
+    // Optimistic user message
     renderOne({ role:'user', content });
     scrollToBottom();
     input.value = '';
 
-    // Typing…
-    showTyping();
+    // Typing …
+    const typingId = showTyping();
     scrollToBottom();
 
+    // Send to server
     try {
       const headers = { 'Content-Type':'application/json', ...(await authHeader()) };
       const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, {
-        method:'POST', headers, body: JSON.stringify({ content })
+        method:'POST',
+        headers,
+        body: JSON.stringify({ content })
       });
 
-      hideTyping();
+      hideTyping(typingId);
 
       if (!r.ok) {
+        console.error('Send message failed', r.status);
+        if (r.status === 401 || r.status === 403) location.hash = '#/login';
+        // Show an inline error bubble so the user sees something
         renderOne({ role:'assistant', content: "Sorry—couldn't send that. Try again." });
         scrollToBottom();
-        if (r.status === 401 || r.status === 403) location.hash = '#/login';
         return;
       }
 
-      // Reload thread so we show the stored assistant message
+      // Reload full thread so we render the assistant reply from DB
       await loadThread();
     } catch (err) {
-      hideTyping();
+      hideTyping(typingId);
+      console.error('Send error:', err);
       renderOne({ role:'assistant', content: "Network hiccup—please try again." });
       scrollToBottom();
     }
   };
+}
+
+// ---------- AUTH HEADER ----------
+async function authHeader() {
+  const u = auth.currentUser;
+  const t = u ? await u.getIdToken() : null;
+  return t ? { Authorization: `Bearer ${t}` } : {};
 }

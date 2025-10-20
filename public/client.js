@@ -11,14 +11,13 @@ const API_BASE = "https://web-chat-api-1tx9.onrender.com";
 
 // Firebase Config
 const firebaseConfig = {
-  apiKey: "AIzaSyBfXlv6cnFWop3qLKXLPSAdR0L0MlPIH5Y",
-  authDomain: "project1-e7dff.firebaseapp.com",
-  databaseURL: "https://project1-e7dff-default-rtdb.firebaseio.com",
-  projectId: "project1-e7dff",
-  storageBucket: "project1-e7dff.firebasestorage.app",
-  messagingSenderId: "41147317681",
-  appId: "1:41147317681:web:34210bd0233408056a5190",
-  measurementId: "G-24ZM1BZGM5"
+  apiKey: "AIzaSyCwhIolibMb9glyOeKWRM0rs3QgIb3kc4E",
+  authDomain: "efq-websec.firebaseapp.com",
+  databaseURL: "https://efq-websec-default-rtdb.firebaseio.com",
+  projectId: "efq-websec",
+  storageBucket: "efq-websec.firebasestorage.app",
+  messagingSenderId: "321904053425",
+  appId: "1:321904053425:web:1f6f9d40587c0d3f662690"
 };
 
 //Firebase

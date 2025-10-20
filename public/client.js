@@ -263,49 +263,97 @@ async function renderChatDetail(id) {
   let isWaiting = false;
 
   // Load + paint messages for this session
-  // Load + paint messages for this session
-async function loadThread({ preserveTyping = false } = {}) {
-  const hadTyping = !!listEl.querySelector('#typing-bubble');
+  async function loadThread() {
+    const headers = await authHeader();
+    const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, { headers });
+    if (!r.ok) {
+      console.error("Load messages failed", r.status);
+      if (r.status === 401 || r.status === 403) location.hash = "#/login";
+      return;
+    }
+    const msgs = await r.json();
 
-  const headers = await authHeader();
-  const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, { headers });
-  if (!r.ok) {
-    console.error("Load messages failed", r.status);
-    if (r.status === 401 || r.status === 403) location.hash = "#/login";
-    return [];
+    listEl.innerHTML = "";
+    for (const m of msgs) renderMessage(listEl, m);
+
+    // Title = first user line if present
+    const firstUser = msgs.find(m => m.role === "user" && (m.content || "").trim());
+    if (firstUser) $("chat-title").textContent = (firstUser.content || "").slice(0, 60);
+
+    listEl.scrollTop = listEl.scrollHeight;
   }
-  const msgs = await r.json();
 
-  listEl.innerHTML = "";
-  for (const m of msgs) renderMessage(listEl, m);
+  // Initial load
+  await loadThread();
 
-  // If we’re still waiting and no assistant message yet, re-add the typing bubble
-  if (preserveTyping && hadTyping && !msgs.some(m => m.role === "assistant")) {
+  // Submit handler: optimistic user bubble + typing + send + poll until assistant reply
+  $("msg-form").onsubmit = async (e) => {
+    e.preventDefault();
+    if (isWaiting) return;
+
+    const input = $("msg");
+    const sendBtn = $("send-btn");
+    const content = (input.value || "").trim();
+    if (!content) return;
+
+    // Optimistic user message
+    renderMessage(listEl, { role: "user", content });
+    listEl.scrollTop = listEl.scrollHeight;
+    input.value = "";
+
+    // Enter waiting state and show typing bubble
+    isWaiting = true;
+    if (sendBtn) sendBtn.disabled = true;
+    input.disabled = true;
     showTyping(listEl);
-  }
 
-  const firstUser = msgs.find(m => m.role === "user" && (m.content || "").trim());
-  if (firstUser) $("chat-title").textContent = (firstUser.content || "").slice(0, 60);
+    try {
+      const headers = { "Content-Type": "application/json", ...(await authHeader()) };
+      const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, {
+        method: "POST", headers, body: JSON.stringify({ content })
+      });
 
-  listEl.scrollTop = listEl.scrollHeight;
-  return msgs;
-}
+      if (!r.ok) {
+        hideTyping(listEl);
+        isWaiting = false;
+        if (sendBtn) sendBtn.disabled = false;
+        input.disabled = false;
+        input.focus();
+        console.error("Send message failed", r.status);
+        if (r.status === 401 || r.status === 403) location.hash = "#/login";
+        renderMessage(listEl, { role: "assistant", content: "Sorry—couldn't send that. Try again." });
+        listEl.scrollTop = listEl.scrollHeight;
+        return;
+      }
 
-// In your submit handler (inside try, after a successful POST):
-let gotAssistant = false;
-for (let i = 0; i < 60; i++) {
-  const msgs = await loadThread({ preserveTyping: true });
-  if (msgs.length && msgs[msgs.length - 1].role === "assistant") { gotAssistant = true; break; }
-  await new Promise(res => setTimeout(res, 1000));
-}
-hideTyping(listEl);
-isWaiting = false;
-if (sendBtn) sendBtn.disabled = false;
-input.disabled = false;
-input.focus();
-if (!gotAssistant) await loadThread();
-listEl.scrollTop = listEl.scrollHeight;
+      // Keep the typing bubble and poll for the assistant reply (up to ~60s)
+      let gotAssistant = false;
+      for (let i = 0; i < 60; i++) {
+        await loadThread();
+        const last = listEl.lastElementChild;
+        if (last && last.classList.contains("assistant")) { gotAssistant = true; break; }
+        await new Promise(res => setTimeout(res, 1000));
+      }
 
+      hideTyping(listEl);
+      isWaiting = false;
+      if (sendBtn) sendBtn.disabled = false;
+      input.disabled = false;
+      input.focus();
+
+      // Final safety refresh if we somehow missed it
+      if (!gotAssistant) await loadThread();
+      listEl.scrollTop = listEl.scrollHeight;
+    } catch (err) {
+      hideTyping(listEl);
+      isWaiting = false;
+      if (sendBtn) sendBtn.disabled = false;
+      input.disabled = false;
+      console.error("Send error:", err);
+      renderMessage(listEl, { role: "assistant", content: "Network hiccup—please try again." });
+      listEl.scrollTop = listEl.scrollHeight;
+    }
+  };
 }
 
 // ---------- AUTH HEADER ----------

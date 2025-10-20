@@ -3,7 +3,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import admin from "firebase-admin";
-
+import cors from "cors";  
 //Firebase Admin
 const saJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON
   ? JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON)
@@ -16,7 +16,12 @@ admin.initializeApp(
 );
 
 const db = admin.database();
-
+app.use(cors({
+  origin: [
+    "https://<your-app>.web.app",
+    "https://<your-app>.firebaseapp.com"
+  ]
+}));
 //App 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();

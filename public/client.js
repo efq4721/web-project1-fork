@@ -342,24 +342,64 @@ async function renderChatDetail(id) {
     if (!r.ok) {
       console.error("Load messages failed", r.status);
       if (r.status === 401 || r.status === 403) location.hash = "#/login";
-      return;
+      return [];
     }
     const msgs = await r.json();
 
     listEl.innerHTML = "";
     for (const m of msgs) renderMessage(listEl, m);
 
-    // Title = first user line if present
+    // Title = first user line if present (will be overridden by manual rename)
     const firstUser = msgs.find(m => m.role === "user" && (m.content || "").trim());
-    if (firstUser) $("chat-title").textContent = (firstUser.content || "").slice(0, 60);
+    if (firstUser && !$("chat-title").textContent) {
+      $("chat-title").textContent = (firstUser.content || "").slice(0, 60);
+    }
 
     listEl.scrollTop = listEl.scrollHeight;
+    return msgs;
   }
 
   // Initial load
   await loadThread();
 
-  // Submit handler: optimistic user bubble + typing + send + poll until assistant reply
+  // Rename in detail view
+  $("btn-rename-chat").onclick = async () => {
+    const current = $("chat-title").textContent || "";
+    const name = prompt("Rename chat:", current);
+    if (name == null) return;
+    const newTitle = name.trim();
+    if (!newTitle) return alert("Title cannot be empty.");
+
+    try {
+      const headers = { "Content-Type": "application/json", ...(await authHeader()) };
+      const r = await fetch(`${API_BASE}/api/sessions/${id}`, {
+        method: "PATCH",
+        headers,
+        body: JSON.stringify({ title: newTitle })
+      });
+      if (!r.ok) throw new Error(`Rename failed: ${r.status}`);
+      $("chat-title").textContent = newTitle;
+    } catch (err) {
+      console.error(err);
+      alert("Could not rename chat.");
+    }
+  };
+
+  // Delete in detail view
+  $("btn-delete-chat").onclick = async () => {
+    if (!confirm("Delete this chat? This cannot be undone.")) return;
+    try {
+      const headers = await authHeader();
+      const r = await fetch(`${API_BASE}/api/sessions/${id}`, { method: "DELETE", headers });
+      if (!r.ok) throw new Error(`Delete failed: ${r.status}`);
+      location.hash = "#/chat";
+    } catch (err) {
+      console.error(err);
+      alert("Could not delete chat.");
+    }
+  };
+
+  // Submit handler: optimistic user bubble + typing + send + render POST reply (no polling)
   $("msg-form").onsubmit = async (e) => {
     e.preventDefault();
     if (isWaiting) return;
@@ -383,7 +423,9 @@ async function renderChatDetail(id) {
     try {
       const headers = { "Content-Type": "application/json", ...(await authHeader()) };
       const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, {
-        method: "POST", headers, body: JSON.stringify({ content })
+        method: "POST",
+        headers,
+        body: JSON.stringify({ content })
       });
 
       if (!r.ok) {
@@ -399,14 +441,9 @@ async function renderChatDetail(id) {
         return;
       }
 
-      // Keep the typing bubble and poll for the assistant reply (up to ~60s)
-      let gotAssistant = false;
-      for (let i = 0; i < 60; i++) {
-        await loadThread();
-        const last = listEl.lastElementChild;
-        if (last && last.classList.contains("assistant")) { gotAssistant = true; break; }
-        await new Promise(res => setTimeout(res, 1000));
-      }
+      // Render the assistant reply from the POST response (no GET-loop)
+      const { reply } = await r.json();
+      renderMessage(listEl, { role: "assistant", content: reply || "" });
 
       hideTyping(listEl);
       isWaiting = false;
@@ -414,8 +451,8 @@ async function renderChatDetail(id) {
       input.disabled = false;
       input.focus();
 
-      // Final safety refresh if we somehow missed it
-      if (!gotAssistant) await loadThread();
+      // Optional: one sync pass so DB matches UI
+      await loadThread();
       listEl.scrollTop = listEl.scrollHeight;
     } catch (err) {
       hideTyping(listEl);
@@ -428,6 +465,7 @@ async function renderChatDetail(id) {
     }
   };
 }
+
 
 // ---------- AUTH HEADER ----------
 async function authHeader() {

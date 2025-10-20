@@ -145,3 +145,40 @@ color:var(--text);
 
 /* Ensure typing dots render visibly inside the bubble */
 .msg.typing .md{ display:inline-block }
+/* --- Full-viewport gradient stays; make sure it sits behind everything --- */
+html, body { height: 100%; }
+body { background: #0b0c12; position: relative; }
+body::before{
+  content:"";
+  position:fixed; inset:0; z-index:-1; pointer-events:none;
+  background:
+    radial-gradient(1200px 800px at 22% 30%, rgba(120,0,255,.28), transparent 60%),
+    radial-gradient(900px 700px  at 78% 65%, rgba(0,170,255,.18), transparent 60%);
+  background-repeat:no-repeat;
+}
+
+/* --- Center the unauthenticated/login view --- */
+/* When the Google sign-in button is present, treat the whole app as a single centered page */
+#app:has(#btn-google) {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+/* If your app shell is a grid with a left sidebar, collapse it on login */
+.app, .shell, .main-layout {
+  /* no change for chat; rules below only apply when #btn-google exists */
+}
+#app:has(#btn-google) .sidebar,
+#app:has(#btn-google) .nav {
+  display: none !important;
+}
+#app:has(#btn-google) .main,
+#app:has(#btn-google) .content,
+#app:has(#btn-google) section {
+  grid-column: 1 / -1 !important;
+  justify-self: center;
+}
+
+/* Optional: tidy up the login card width */
+.login-card { width: min(560px, 92vw); margin: 0 auto; }

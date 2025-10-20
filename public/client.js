@@ -241,80 +241,160 @@ async function renderChatList() {
     return `<li><a href="#/chat/${s.id}">${escapeHtml(s.title || s.id)}</a> <small class="muted">${when}</small></li>`;
   }).join("");
 }
+function renderOneMessage(container, m){
+  const div = document.createElement('div');
+  div.className = `msg ${m.role === 'assistant' ? 'assistant' : 'you'}`;
+  div.innerHTML = `
+    <div class="who">${m.role === 'assistant' ? '🤖' : 'You'}</div>
+    <div class="md">${(window.renderMarkdown ? renderMarkdown(m.content || '') : (m.content || '').replace(/</g,'&lt;'))}</div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
 
-async function renderChatDetail(id) {
-  $("app").innerHTML = tpl("tpl-chat-detail");
-  const container = $("messages");
-  const input = $("msg");
-  const form = $("msg-form");
+function showTyping(container, id){
+  const div = document.createElement('div');
+  div.id = id;
+  div.className = 'msg assistant typing';
+  div.innerHTML = `
+    <div class="who">🤖</div>
+    <div class="md"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+  `;
+  container.appendChild(div);
+  container.scrollTop = container.scrollHeight;
+}
 
-  const logout = $("btn-logout");
-  if (logout) logout.onclick = () => signOut(auth);
+function hideTyping(id){
+  const el = document.getElementById(id);
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+}
 
-  // Keep a set of rendered ids so we only append new ones
-  const seen = new Set();
+async function renderChatDetail(id){
+  // Build the view
+  $('app').innerHTML = `
+    <section class="chat">
+      <div class="chat-head">
+        <a class="link-back" href="#/chat">← All Chats</a>
+        <div class="chat-title" id="chat-title"></div>
+      </div>
 
-  async function refresh() {
+      <div class="messages" id="messages"></div>
+
+      <form class="composer" id="msg-form">
+        <input id="msg" class="input" placeholder="Type your message…" autocomplete="off" />
+        <button class="btn btn-primary" id="send-btn" type="submit">Send</button>
+      </form>
+    </section>
+  `;
+
+  // Small helpers for this view
+  const listEl = $('messages');
+
+  const md = (txt) => {
+    // Prefer global markdown renderer if you added one; otherwise simple escape+br
+    if (typeof window.renderMarkdown === 'function') return window.renderMarkdown(txt || '');
+    return (txt || '').replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\n/g,"<br>");
+  };
+
+  const renderOne = (m) => {
+    const wrap = document.createElement('div');
+    wrap.className = `msg ${m.role === 'assistant' ? 'assistant' : 'you'}`;
+    wrap.innerHTML = `
+      <div class="who">${m.role === 'assistant' ? '🤖' : 'You'}</div>
+      <div class="md">${md(m.content || '')}</div>
+    `;
+    listEl.appendChild(wrap);
+  };
+
+  const showTyping = () => {
+    const el = document.createElement('div');
+    el.id = 'typing-bubble';
+    el.className = 'msg assistant typing';
+    el.innerHTML = `
+      <div class="who">🤖</div>
+      <div class="md"><span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></div>
+    `;
+    listEl.appendChild(el);
+    return el.id;
+  };
+
+  const hideTyping = (id) => {
+    const el = document.getElementById(id);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  };
+
+  const scrollToBottom = () => {
+    listEl.scrollTop = listEl.scrollHeight;
+  };
+
+  // Load + paint messages for this session
+  async function loadThread(){
     const headers = await authHeader();
-    const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, { headers, cache: "no-store" });
+    const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, { headers });
     if (!r.ok) {
-      console.error("Load messages failed", r.status);
-      if (r.status === 401 || r.status === 403) location.hash = "#/login";
+      console.error('Load messages failed', r.status);
+      if (r.status === 401 || r.status === 403) location.hash = '#/login';
       return;
     }
     const msgs = await r.json();
-    for (const m of msgs) {
-      if (seen.has(m.id)) continue;
-      seen.add(m.id);
-      renderMessage(container, m);
-    }
-    autoScroll(container);
+
+    listEl.innerHTML = '';
+    for (const m of msgs) renderOne(m);
+
+    // Title = first user line if present
+    const firstUser = msgs.find(m => m.role === 'user' && (m.content || '').trim());
+    if (firstUser) $('chat-title').textContent = (firstUser.content || '').slice(0, 60);
+    scrollToBottom();
   }
 
-  await refresh();
+  // Initial load
+  await loadThread();
 
-  form.onsubmit = async (e) => {
+  // Submit handler: optimistic user bubble + typing + send + refresh
+  $('msg-form').onsubmit = async (e)=>{
     e.preventDefault();
-    const content = (input.value || "").trim();
+    const input = $('msg');
+    const content = (input.value || '').trim();
     if (!content) return;
 
-    // Show *your* message immediately
-    const now = Date.now();
-    const tempId = `local-${now}`;
-    const mine = { id: tempId, role: "user", content };
-    renderMessage(container, mine);
-    autoScroll(container);
-    input.value = "";
+    // Optimistic user message
+    renderOne({ role:'user', content });
+    scrollToBottom();
+    input.value = '';
 
-    // Show typing dots
-    const typingEl = addTyping(container);
-    autoScroll(container);
+    // Typing …
+    const typingId = showTyping();
+    scrollToBottom();
 
     // Send to server
     try {
-      const headers = { "Content-Type": "application/json", ...(await authHeader()) };
+      const headers = { 'Content-Type':'application/json', ...(await authHeader()) };
       const r = await fetch(`${API_BASE}/api/sessions/${id}/messages`, {
-        method: "POST", headers, body: JSON.stringify({ content })
+        method:'POST',
+        headers,
+        body: JSON.stringify({ content })
       });
 
-      removeTyping(container);
+      hideTyping(typingId);
 
       if (!r.ok) {
-        console.error("Send failed", r.status);
-        if (r.status === 401 || r.status === 403) location.hash = "#/login";
+        console.error('Send message failed', r.status);
+        if (r.status === 401 || r.status === 403) location.hash = '#/login';
+        // Show an inline error bubble so the user sees something
+        renderOne({ role:'assistant', content: "Sorry—couldn't send that. Try again." });
+        scrollToBottom();
         return;
       }
-      // Pull server truth and append only new ones
-      await refresh();
+
+      // Reload full thread so we render the assistant reply from DB
+      await loadThread();
     } catch (err) {
-      console.error("Send error", err);
-      removeTyping(container);
+      hideTyping(typingId);
+      console.error('Send error:', err);
+      renderOne({ role:'assistant', content: "Network hiccup—please try again." });
+      scrollToBottom();
     }
   };
-
-  // Optional: light polling to pick up messages created from another tab
-  const interval = setInterval(refresh, 5000);
-  window.addEventListener("hashchange", () => clearInterval(interval), { once: true });
 }
 
 // ---------- AUTH HEADER ----------

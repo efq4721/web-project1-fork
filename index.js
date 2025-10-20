@@ -165,7 +165,7 @@ async function callGeminiOnce({ prompt, systemText, model, ver }) {
     systemInstruction: systemText ? { parts: [{ text: systemText }] } : undefined,
     contents: [{ role: "user", parts: [{ text: prompt }]}],
     generationConfig: {
-      maxOutputTokens: 1536,
+      maxOutputTokens: 2048,
       temperature: 0.7,
       topK: 64,
       topP: 0.95,

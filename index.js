@@ -195,6 +195,38 @@ async function callGemini({ prompt, model, ver, systemText }) {
   return { status:r.status, body:text, ct };
 }
 
+async function autocorrectPrompt(original) {
+  // Use a very reliable model to produce a corrected prompt (plain text only)
+  const KEY = process.env.GEMINI_API_KEY;
+  if (!KEY) return original;
+
+  const model = "gemini-1.5-flash-001";
+  const ver = "v1";
+  const url = `https://generativelanguage.googleapis.com/${ver}/models/${model}:generateContent?key=${encodeURIComponent(KEY)}`;
+
+  const body = {
+    systemInstruction: {
+      parts: [{ text:
+`You correct obvious typos/misspellings in short questions.
+Return ONLY the corrected question as plain text. No quotes, no extra words.
+If no correction is needed, output the input unchanged.` }]
+    },
+    contents: [{ role: "user", parts: [{ text: original }]}],
+    generationConfig: {
+      maxOutputTokens: 32,
+      temperature: 0,
+      responseMimeType: "text/plain",
+      response_mime_type: "text/plain"
+    }
+  };
+
+  try {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const out = (await r.text()).trim();
+    if (r.ok && out) return out;
+  } catch (_) {}
+  return original;
+}
 
 
 async function generateTextFromGemini(prompt, systemText) {
